@@ -2,7 +2,7 @@ import logging
 from typing import Callable, Optional
 
 from core.project_context import ProjectContext
-from services.vc_service import VCService
+from services.model_manager import ModelManager
 
 # Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
@@ -14,8 +14,8 @@ class VCPipeline:
     к аудиофайлам озвученной главы.
     """
 
-    def __init__(self, vc_service: VCService):
-        self.vc_service = vc_service
+    def __init__(self, model_manager: ModelManager):
+        self.model_manager = model_manager
         logger.info("✅ Пайплайн VCPipeline (Voice Conversion) инициализирован.")
 
     def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
@@ -40,12 +40,18 @@ class VCPipeline:
                 return
             logger.info("Сценарий успешно загружен.")
 
+            vc_service = self.model_manager.get_vc_service()
+
+            vc_model = vc_service.vc_model
+            if not vc_model:
+                update_progress(1.0, "Ошибка", "Не удалось загрузить модель Voice Conversion. Прерывание.")
+                return
+
             # --- Шаг 2: Обработка реплик ---
             stage = "Обработка реплик"
             update_progress(0.1, stage, "Начало применения эмоциональной окраски...")
             total_entries = len(scenario.entries)
             processed_count = 0
-            vc_model = None  # Ленивая загрузка модели
 
             for i, entry in enumerate(scenario.entries):
                 progress = 0.1 + (0.9 * (i / total_entries))
@@ -67,7 +73,7 @@ class VCPipeline:
                     continue
 
                 # Ищем референсный аудиофайл для нужной эмоции
-                reference_wav_path = self.vc_service.find_reference_wav_for_emotion(entry.emotion)
+                reference_wav_path = vc_service.find_reference_wav_for_emotion(entry.emotion)
 
                 if not reference_wav_path:
                     logger.warning(f"Не найден референс для эмоции '{entry.emotion}'. Пропуск реплики {entry_id}.")
@@ -76,14 +82,6 @@ class VCPipeline:
                 update_progress(progress, stage,
                                 f"Реплика {entry_id}/{total_entries}: применение эмоции '{entry.emotion}'...")
                 logger.info(f"Применение стиля из: {reference_wav_path.name}")
-
-                # Загружаем модель только при первом использовании
-                if vc_model is None:
-                    logger.info("Загрузка модели Voice Conversion...")
-                    vc_model = self.vc_service.get_vc_model()
-                    if not vc_model:
-                        update_progress(1.0, "Ошибка", "Не удалось загрузить модель Voice Conversion. Прерывание.")
-                        return
 
                 try:
                     # Выполняем конвертацию и перезаписываем исходный файл

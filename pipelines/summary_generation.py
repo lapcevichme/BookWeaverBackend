@@ -3,23 +3,21 @@
 """
 from __future__ import annotations
 import logging
-from typing import TYPE_CHECKING, Optional, Callable
+from typing import Optional, Callable
 
 from core.project_context import ProjectContext
 from core.data_models import ChapterSummary
 from pipelines import prompts
+from services.model_manager import ModelManager
 from utils import file_utils
-
-if TYPE_CHECKING:
-    from services.llm_service import LLMService
 
 # Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
 
 
 class SummaryGenerationPipeline:
-    def __init__(self, llm_service: LLMService):
-        self.llm = llm_service
+    def __init__(self, model_manager: ModelManager): # <--- ИЗМЕНЕНИЕ
+        self.model_manager = model_manager
         logger.info("✅ Пайплайн SummaryGenerationPipeline инициализирован.")
 
     def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
@@ -49,6 +47,8 @@ class SummaryGenerationPipeline:
             processed_count = 0
             stage = "Обработка глав"
 
+            llm_service = self.model_manager.get_llm_service('character_analyzer')
+
             for i, (vol_path, chap_path) in enumerate(all_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
 
@@ -70,7 +70,7 @@ class SummaryGenerationPipeline:
                     update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: генерация пересказа...")
                     chapter_context = ProjectContext(context.book_name, vol_num, chap_num)
                     prompt = prompts.format_summary_generation_prompt(chapter_context)
-                    summary_result = self.llm.call_for_pydantic(ChapterSummary, prompt)
+                    summary_result = llm_service.call_for_pydantic(ChapterSummary, prompt)
 
                     if summary_result:
                         summary_archive.summaries[chapter_id] = summary_result

@@ -16,9 +16,9 @@ from pydantic import BaseModel
 from enum import Enum
 import uvicorn
 
-# Импортируем существующие компоненты вашего проекта
 import config
 from main import Application
+from services.model_manager import ModelManager
 from core.project_context import ProjectContext
 from utils.book_converter import BookConverter
 from utils.setup_logging import setup_logging
@@ -40,6 +40,9 @@ SERVER_STATUS = ServerStatus(status=ServerStateEnum.INITIALIZING, message="Serve
 
 # --- 2. Инициализация приложения и пайплайнов ---
 
+# Создаем единственный глобальный экземпляр менеджера
+model_manager = ModelManager()
+
 app_pipelines: Application | None = None
 background_tasks: Dict[str, Dict[str, Any]] = {}
 
@@ -54,7 +57,9 @@ async def lifespan(app: FastAPI):
         # Настраиваем логирование при старте
         setup_logging()
         logger.info("Инициализация AI-пайплайнов при старте сервера...")
-        app_pipelines = Application()
+
+        app_pipelines = Application(model_manager=model_manager)
+
         SERVER_STATUS = ServerStatus(status=ServerStateEnum.READY, message="AI pipelines initialized successfully.")
         logger.info(f"✅ {SERVER_STATUS.message}")
     except Exception as e:
@@ -72,10 +77,8 @@ app = FastAPI(
     title="BookWeaver AI Backend",
     description="Локальный сервер для выполнения тяжелых AI-задач.",
     version="1.0.0",
-    lifespan=lifespan  # <-- ИСПОЛЬЗУЕМ НОВЫЙ МЕХАНИЗМ LIFESPAN
+    lifespan=lifespan
 )
-
-
 
 # --- 3. Модели данных для API (Pydantic) ---
 
@@ -91,7 +94,7 @@ class TaskStatusResponse(BaseModel):
     task_id: str
     status: Literal["queued", "processing", "complete", "failed"]
     progress: float
-    stage: str  # <-- ДОБАВЛЕНО ПОЛЕ ЭТАПА
+    stage: str
     message: str
 
 class ChapterStatus(BaseModel):
@@ -161,10 +164,12 @@ def _start_task(target_func, background_tasks_runner: BackgroundTasks, **kwargs)
 # --- Health Check & Task Management ---
 @app.get("/health", response_model=ServerStatus, tags=["Health Check"])
 async def health_check():
+    """Проверяет текущее состояние готовности сервера."""
     return SERVER_STATUS
 
 @app.get("/api/v1/tasks/{task_id}/status", response_model=TaskStatusResponse, tags=["Task Management"])
 async def get_task_status(task_id: str):
+    """Возвращает статус и прогресс для фоновой задачи по её ID."""
     task = background_tasks.get(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена.")
@@ -173,29 +178,34 @@ async def get_task_status(task_id: str):
 # --- AI Tasks ---
 @app.post("/api/v1/analyze_characters", response_model=TaskStatusResponse, status_code=202, tags=["AI Tasks"])
 async def start_character_analysis(req: BookTaskRequest, runner: BackgroundTasks):
+    """Запускает фоновую задачу для анализа персонажей во всей книге."""
     return _start_task(app_pipelines.character_pipeline.run, runner, book_name=req.book_name)
 
 @app.post("/api/v1/generate_summaries", response_model=TaskStatusResponse, status_code=202, tags=["AI Tasks"])
 async def start_summary_generation(req: BookTaskRequest, runner: BackgroundTasks):
+    """Запускает фоновую задачу для генерации пересказа для всех глав книги."""
     context = ProjectContext(book_name=req.book_name)
     return _start_task(app_pipelines.summary_pipeline.run, runner, context=context)
 
 @app.post("/api/v1/generate_scenario", response_model=TaskStatusResponse, status_code=202, tags=["AI Tasks"])
 async def start_scenario_generation(req: ChapterTaskRequest, runner: BackgroundTasks):
+    """Запускает фоновую задачу для генерации сценария для одной главы."""
     context = ProjectContext(book_name=req.book_name, volume_num=req.volume_num, chapter_num=req.chapter_num)
     return _start_task(app_pipelines.scenario_pipeline.run, runner, context=context)
 
 @app.post("/api/v1/synthesize_tts", response_model=TaskStatusResponse, status_code=202, tags=["AI Tasks"])
 async def start_tts_synthesis(req: ChapterTaskRequest, runner: BackgroundTasks):
+    """Запускает фоновую задачу для синтеза речи (TTS) для одной главы."""
     context = ProjectContext(book_name=req.book_name, volume_num=req.volume_num, chapter_num=req.chapter_num)
     return _start_task(app_pipelines.tts_pipeline.run, runner, context=context)
 
 @app.post("/api/v1/apply_voice_conversion", response_model=TaskStatusResponse, status_code=202, tags=["AI Tasks"])
 async def start_voice_conversion(req: ChapterTaskRequest, runner: BackgroundTasks):
+    """Запускает фоновую задачу для применения эмоциональной окраски (VC) для одной главы."""
     context = ProjectContext(book_name=req.book_name, volume_num=req.volume_num, chapter_num=req.chapter_num)
     return _start_task(app_pipelines.vc_pipeline.run, runner, context=context)
 
-# --- Projects & Files API (без изменений) ---
+# --- Projects & Files API ---
 TAG_PROJECTS = "Projects & Files API"
 
 @app.post("/api/v1/projects/import", tags=[TAG_PROJECTS])
@@ -207,9 +217,6 @@ async def import_project(file: UploadFile = File(...)):
     temp_dir.mkdir(exist_ok=True)
     temp_file_path = temp_dir / file.filename
     try:
-        # ИСПРАВЛЕНИЕ: Используем более надежный метод. Сначала полностью считываем
-        # файл в память с помощью await, а затем синхронно записываем на диск.
-        # Это избегает потенциальных проблем с типами файловых объектов.
         contents = await file.read()
         with open(temp_file_path, "wb") as buffer:
             buffer.write(contents)
@@ -263,6 +270,7 @@ async def get_project_details(book_name: str):
 
 @app.get("/api/v1/projects/{book_name}/artifacts/{artifact_name}", tags=[TAG_PROJECTS])
 async def get_book_artifact(book_name: str, artifact_name: BookArtifactName):
+    """Возвращает содержимое артефакта уровня книги (например, manifest.json)."""
     context = ProjectContext(book_name=book_name)
     artifact_path = getattr(context, f"{artifact_name.value}_file", None)
     if not artifact_path or not artifact_path.exists():
@@ -304,6 +312,7 @@ async def get_chapter_artifact(book_name: str, volume_num: int, chapter_num: int
 # --- Root and Server Run ---
 @app.get("/", include_in_schema=False)
 async def root():
+    """Корневой эндпоинт для простой проверки, что сервер запущен."""
     return {"message": "BookWeaver AI Backend работает. Перейдите на /docs для просмотра API."}
 
 if __name__ == "__main__":

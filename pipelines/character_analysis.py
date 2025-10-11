@@ -7,7 +7,7 @@ from typing import List, Optional, Callable
 
 from core.project_context import ProjectContext
 from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList
-from services.llm_service import LLMService
+from services.model_manager import ModelManager
 from utils import file_utils
 from pipelines import prompts
 
@@ -23,9 +23,8 @@ class CharacterAnalysisPipeline:
     2. 'Операция': Глубокий анализ и создание 'патча' для обновления архива.
     """
 
-    def __init__(self, fast_llm: LLMService, powerful_llm: LLMService):
-        self.fast_llm = fast_llm
-        self.powerful_llm = powerful_llm
+    def __init__(self, model_manager: ModelManager):  # <--- ИЗМЕНЕНИЕ
+        self.model_manager = model_manager
         logger.info("✅ Пайплайн CharacterAnalysisPipeline инициализирован.")
 
     def run(self, book_name: str, progress_callback: Optional[Callable[[float, str, str], None]] = None):
@@ -118,6 +117,8 @@ class CharacterAnalysisPipeline:
 
     def _perform_recon(self, archive: CharacterArchive, chapter_text: str) -> Optional[CharacterReconResult]:
         """Этап 'Разведки': быстрый поиск упоминаний."""
+        fast_llm = self.model_manager.get_llm_service('character_analyzer')
+
         logger.info("Шаг 1: 'Умная разведка' - сопоставление с известными и поиск новых...")
         known_chars_for_recon = [
             {"name": char.name, "aliases": char.aliases}
@@ -125,15 +126,17 @@ class CharacterAnalysisPipeline:
         ]
         known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False, indent=2)
         recon_prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json)
-        return self.fast_llm.call_for_pydantic(CharacterReconResult, recon_prompt)
+        return fast_llm.call_for_pydantic(CharacterReconResult, recon_prompt)
 
     def _perform_operation(self, relevant_chars_json: str, chapter_text: str, vol_num: int, chap_num: int) -> Optional[CharacterPatchList]:
         """Этап 'Операции': глубокий анализ и создание патча."""
+        powerful_llm = self.model_manager.get_llm_service('scenario_generator')
+
         logger.info("Шаг 2: 'Операция' - запрос патча с изменениями...")
         patch_prompt = prompts.format_character_patch_prompt(
             relevant_chars_json, chapter_text, vol_num, chap_num
         )
-        return self.powerful_llm.call_for_pydantic(CharacterPatchList, patch_prompt)
+        return powerful_llm.call_for_pydantic(CharacterPatchList, patch_prompt)
 
 
     def _is_chapter_processed(self, archive: CharacterArchive, chapter_id: str) -> bool:

@@ -7,7 +7,7 @@ import soundfile as sf
 
 import config
 from core.project_context import ProjectContext
-from services.tts_service import TTSService
+from services.model_manager import ModelManager
 from utils import text_utils
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,8 @@ class TTSPipeline:
     Основной пайплайн для синтеза речи для всей главы на основе файла сценария.
     """
 
-    def __init__(self, tts_service: TTSService):
-        self.tts_service = tts_service
+    def __init__(self, model_manager: ModelManager):  # <--- ИЗМЕНЕНИЕ
+        self.model_manager = model_manager
         self.pronunciation_dict = text_utils.load_pronunciation_dictionary(config.PRONUNCIATION_DICT_FILE)
         logger.info("✅ Пайплайн TTSPipeline инициализирован.")
 
@@ -41,6 +41,11 @@ class TTSPipeline:
             stage = "Загрузка данных"
             update_progress(0.05, stage, "Загрузка файла сценария...")
             scenario = context.load_scenario()
+            tts_service = self.model_manager.get_tts_service()
+
+            if not tts_service.tts_model:
+                raise RuntimeError("TTS модель не смогла загрузиться. Пайплайн остановлен.")
+
             if not scenario:
                 raise FileNotFoundError(f"Файл сценария не найден для главы {context.chapter_id}.")
 
@@ -96,17 +101,17 @@ class TTSPipeline:
                     logger.info(f"Текст реплики {i + 1} пуст после обработки. Пропуск.")
                     continue
 
-                synthesis_result = self.tts_service.synthesize(processed_text, speaker_wav_path)
+                synthesis_result = tts_service.synthesize(processed_text, speaker_wav_path)
 
                 if synthesis_result:
-                    audio_filename = f"entry_{i + 1}.wav" # todo: проверить что имя не конфликтует. Старый формат: chap_{context.chapter_id}_entry_{i + 1}.wav
+                    audio_filename = f"entry_{i + 1}.wav"
                     audio_path = audio_output_dir / audio_filename
 
                     sf.write(str(audio_path), np.array(synthesis_result),
-                             self.tts_service.tts_model.synthesizer.output_sample_rate)
+                             tts_service.tts_model.synthesizer.output_sample_rate)
 
                     audio_duration_ms = int(
-                        (len(synthesis_result) / self.tts_service.tts_model.synthesizer.output_sample_rate) * 1000)
+                        (len(synthesis_result) / tts_service.tts_model.synthesizer.output_sample_rate) * 1000)
                     logger.info(
                         f"Аудио для реплики {i + 1} успешно сохранено в {audio_filename} (длительность: {audio_duration_ms} мс).")
 
@@ -114,7 +119,7 @@ class TTSPipeline:
                     stage = "Создание субтитров"
                     update_progress(progress, stage, f"Реплика {i + 1}/{total_entries}: Генерация таймкодов...")
 
-                    word_timings = self.tts_service.generate_word_timings(entry.text, audio_path)
+                    word_timings = tts_service.generate_word_timings(entry.text, audio_path)
 
                     subtitle_entry = self._create_subtitle_entry(
                         audio_filename, entry.text, total_duration_ms, audio_duration_ms, word_timings

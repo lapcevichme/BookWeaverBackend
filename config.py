@@ -28,6 +28,9 @@ EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_lib
 FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
 POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
 
+ANALYZER_LLM_TEMPERATURE = 0.5
+GENERATOR_LLM_TEMPERATURE = 0.5
+
 # Назначение моделей для конкретных задач
 ENTITY_EXTRACTION_MODEL_NAME = FAST_MODEL_NAME
 DIALOGUE_ANNOTATION_MODEL_NAME = FAST_MODEL_NAME
@@ -35,6 +38,7 @@ CHARACTER_ANALYSIS_MODEL_NAME = POWERFUL_MODEL_NAME
 
 # Настройки TTS (Синтеза речи)
 TTS_ENGINE = "xtts"  # "xtts" или "gtts"
+VC_MODEL_NAME = "ennis"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 DEFAULT_SPEAKER_VOICE_FILENAME = "default_fallback.wav"
 

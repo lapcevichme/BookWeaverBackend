@@ -15,8 +15,8 @@ from core.data_models import (
     AmbientTransitionList,
     EmotionMap, ChapterSummaryArchive,
 )
-from services.llm_service import LLMService
 from pipelines import prompts
+from services.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
@@ -25,9 +25,8 @@ class ScenarioGenerationPipeline:
     Класс-оркестратор, управляющий процессом генерации сценария для одной главы.
     """
 
-    def __init__(self, fast_llm: LLMService, powerful_llm: LLMService):
-        self.fast_llm = fast_llm
-        self.powerful_llm = powerful_llm
+    def __init__(self, model_manager: ModelManager): # <--- ИЗМЕНЕНИЕ
+        self.model_manager = model_manager
         self._load_libraries()
         logger.info("✅ Пайплайн ScenarioGenerationPipeline инициализирован.")
 
@@ -156,6 +155,8 @@ class ScenarioGenerationPipeline:
         """
         Вызывает LLM для преобразования текста главы в "сырой" сценарий.
         """
+        powerful_llm = self.model_manager.get_llm_service('scenario_generator')
+
         chapter_summary_data = summary_archive.summaries.get(context.chapter_id)
         synopsis_text = chapter_summary_data.synopsis if chapter_summary_data else None
 
@@ -169,14 +170,15 @@ class ScenarioGenerationPipeline:
             character_archive,
             synopsis_text
         )
-        return self.powerful_llm.call_for_pydantic(RawScenario, prompt)
+        return powerful_llm.call_for_pydantic(RawScenario, prompt)
 
     def _enrich_with_ambient(self, context: ProjectContext, entries: List[Dict]) -> List[Dict]:
         """
         Определяет эмбиент для каждой записи сценария.
         """
+        fast_llm = self.model_manager.get_llm_service('character_analyzer')
         prompt = prompts.format_ambient_extraction_prompt(context, self.ambient_library)
-        ambient_data = self.fast_llm.call_for_pydantic(AmbientTransitionList, prompt)
+        ambient_data = fast_llm.call_for_pydantic(AmbientTransitionList, prompt)
 
         if not ambient_data or not ambient_data.transitions:
             logger.warning("Не найдено точек смены эмбиента. Вся глава будет без фоновых звуков.")
@@ -203,6 +205,8 @@ class ScenarioGenerationPipeline:
         Определяет эмоции для всех реплик, где спикер - не "Рассказчик".
         Это включает в себя и диалоги, и внутренние монологи.
         """
+        fast_llm = self.model_manager.get_llm_service('character_analyzer')
+
         if not self.available_emotions:
             logger.warning("Список доступных эмоций пуст. Анализ эмоций пропускается.")
             for entry in entries:
@@ -227,7 +231,7 @@ class ScenarioGenerationPipeline:
         prompt = prompts.format_emotion_analysis_prompt(
             replicas_to_analyze, char_profiles, self.available_emotions
         )
-        emotion_map_data = self.fast_llm.call_for_pydantic(EmotionMap, prompt)
+        emotion_map_data = fast_llm.call_for_pydantic(EmotionMap, prompt)
 
         if not emotion_map_data:
             logger.error("LLM не смогла проанализировать эмоции.")
