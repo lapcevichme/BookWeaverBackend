@@ -1,145 +1,144 @@
 import json
+import logging
+from typing import Callable, Optional
+
 import numpy as np
 import soundfile as sf
-from typing import Callable, Optional
 
 import config
 from core.project_context import ProjectContext
 from services.tts_service import TTSService
 from utils import text_utils
 
+logger = logging.getLogger(__name__)
+
 
 class TTSPipeline:
     """
-    The main pipeline for synthesizing speech for an entire chapter based on a scenario file.
+    Основной пайплайн для синтеза речи для всей главы на основе файла сценария.
     """
 
     def __init__(self, tts_service: TTSService):
         self.tts_service = tts_service
         self.pronunciation_dict = text_utils.load_pronunciation_dictionary(config.PRONUNCIATION_DICT_FILE)
+        logger.info("✅ Пайплайн TTSPipeline инициализирован.")
 
-    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str], None]] = None):
+    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
-        Executes the full TTS pipeline for a given chapter context.
+        Выполняет полный пайплайн TTS для заданного контекста главы.
         """
 
-        def update_progress(progress: float, message: str):
-            print(message)
+        def update_progress(progress: float, stage: str, message: str):
+            # Логируем то же сообщение, что отправляем на фронтенд
+            logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
             if progress_callback:
-                progress_callback(progress, message)
+                progress_callback(progress, stage, message)
 
-        update_progress(0.0, f"\n{'=' * 80}\n🚀 STARTING TTS PIPELINE for chapter {context.chapter_id} 🚀\n{'=' * 80}")
+        update_progress(0.0, "Подготовка", f"Запуск синтеза речи для главы {context.chapter_id}")
 
         try:
-            # 1. Load necessary files
-            update_progress(0.05, "--- Step 1: Loading project data ---")
+            # --- Шаг 1: Загрузка необходимых файлов ---
+            stage = "Загрузка данных"
+            update_progress(0.05, stage, "Загрузка файла сценария...")
             scenario = context.load_scenario()
             if not scenario:
-                update_progress(1.0, f"❌ CRITICAL: Scenario file not found for {context.chapter_id}. Aborting.")
-                return
+                raise FileNotFoundError(f"Файл сценария не найден для главы {context.chapter_id}.")
 
+            update_progress(0.07, stage, "Загрузка манифеста книги...")
             manifest = context.load_manifest()
             if not manifest:
-                update_progress(1.0, f"❌ CRITICAL: Manifest file not found for {context.book_name}. Aborting.")
-                return
+                raise FileNotFoundError(f"Файл манифеста не найден для книги {context.book_name}.")
 
-            update_progress(0.1, "   -> Scenario and Manifest loaded successfully.")
+            update_progress(0.1, stage, "Сценарий и манифест успешно загружены.")
 
-            # 2. Synthesize audio for each entry
-            update_progress(0.1, "\n--- Step 2: Synthesizing audio entries ---")
+            # --- Шаг 2: Синтез аудио для каждой реплики ---
             audio_output_dir = context.get_audio_output_dir()
-            audio_output_dir.mkdir(parents=True, exist_ok=True)
-
             subtitle_path = context.get_subtitles_file()
-
-            update_progress(0.1,
-                            f"   -> DEBUG: Attempting to create subtitles directory: {subtitle_path.parent.resolve()}")
-
-            subtitle_path.parent.mkdir(parents=True, exist_ok=True)
-            update_progress(0.1, f"   -> Subtitles will be saved to {subtitle_path.name}")
+            context.ensure_dirs()  # Убедимся, что все директории созданы
 
             subtitles_data = []
             total_duration_ms = 0
             total_entries = len(scenario.entries)
 
+            if total_entries == 0:
+                update_progress(1.0, "Завершено", "Сценарий не содержит реплик для озвучивания.")
+                return
+
             for i, entry in enumerate(scenario.entries):
+                # Рассчитываем общий прогресс
                 progress = 0.1 + (0.8 * (i / total_entries))
-                update_progress(progress, f"   -> Processing entry {i + 1}/{total_entries} (Speaker: {entry.speaker})")
+                stage = "Синтез речи"
+                update_progress(progress, stage, f"Реплика {i + 1}/{total_entries} (Спикер: {entry.speaker})")
 
-                # --- Voice retrieval logic ---
-                if entry.speaker:
-                    character_name = entry.speaker
-                    voice_id = manifest.character_voices.get(character_name)
+                # --- Логика выбора голоса ---
+                character_name = entry.speaker if entry.speaker else "Рассказчик"
+                voice_id = manifest.character_voices.get(character_name)
 
-                    if not voice_id:
-                        update_progress(progress,
-                                        f"      -> ⚠️ Voice for '{character_name}' not in manifest. Using narrator voice.")
-                        voice_id = manifest.default_narrator_voice
-                else:
-                    character_name = "Рассказчик"
+                if not voice_id:
+                    logger.warning(
+                        f"Голос для '{character_name}' не найден в манифесте. Используется голос рассказчика.")
                     voice_id = manifest.default_narrator_voice
 
                 if not voice_id:
-                    update_progress(progress,
-                                    f"      -> ❌ CRITICAL ERROR: Voice ID not defined for '{character_name}'. Skipping entry.")
+                    logger.error(
+                        f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика по-умолчанию. Пропуск реплики.")
                     continue
 
                 speaker_wav_path = context.get_voice_path(voice_id)
-
                 if not speaker_wav_path.exists():
-                    update_progress(progress,
-                                    f"      -> ❌ REFERENCE NOT FOUND for voice '{voice_id}' at {speaker_wav_path}. Skipping entry.")
+                    logger.error(
+                        f"Референсный WAV-файл для голоса '{voice_id}' не найден по пути {speaker_wav_path}. Пропуск реплики.")
                     continue
 
-                # --- Text preprocessing ---
+                # --- Предобработка текста и синтез ---
                 processed_text = text_utils.preprocess_text_for_tts(entry.text, self.pronunciation_dict)
                 if not processed_text:
-                    update_progress(progress, "      -> ⏩ Entry text is empty after processing. Skipping.")
+                    logger.info(f"Текст реплики {i + 1} пуст после обработки. Пропуск.")
                     continue
 
                 synthesis_result = self.tts_service.synthesize(processed_text, speaker_wav_path)
 
                 if synthesis_result:
-                    audio_filename = f"chap_{context.chapter_id}_entry_{i + 1}.wav"
+                    audio_filename = f"entry_{i + 1}.wav" # todo: проверить что имя не конфликтует. Старый формат: chap_{context.chapter_id}_entry_{i + 1}.wav
                     audio_path = audio_output_dir / audio_filename
 
                     sf.write(str(audio_path), np.array(synthesis_result),
                              self.tts_service.tts_model.synthesizer.output_sample_rate)
 
-                    audio_duration_ms = int((len(
-                        synthesis_result) / self.tts_service.tts_model.synthesizer.output_sample_rate) * 1000)
+                    audio_duration_ms = int(
+                        (len(synthesis_result) / self.tts_service.tts_model.synthesizer.output_sample_rate) * 1000)
+                    logger.info(
+                        f"Аудио для реплики {i + 1} успешно сохранено в {audio_filename} (длительность: {audio_duration_ms} мс).")
 
-                    # Generate word timings using Whisper alignment
+                    # --- Создание субтитров с таймкодами ---
+                    stage = "Создание субтитров"
+                    update_progress(progress, stage, f"Реплика {i + 1}/{total_entries}: Генерация таймкодов...")
+
                     word_timings = self.tts_service.generate_word_timings(entry.text, audio_path)
 
                     subtitle_entry = self._create_subtitle_entry(
-                        audio_filename,
-                        entry.text,
-                        total_duration_ms,
-                        audio_duration_ms,
-                        word_timings
+                        audio_filename, entry.text, total_duration_ms, audio_duration_ms, word_timings
                     )
                     subtitles_data.append(subtitle_entry)
                     total_duration_ms += audio_duration_ms
-                    update_progress(progress, f"      -> ✅ Audio saved to {audio_filename}")
 
-                    # Сохраняем обновленный файл субтитров после КАЖДОЙ реплики
+                    # Сохраняем обновленный файл субтитров после КАЖДОЙ реплики для отказоустойчивости
                     with open(subtitle_path, 'w', encoding='utf-8') as f:
                         json.dump(subtitles_data, f, ensure_ascii=False, indent=2)
-
                 else:
-                    update_progress(progress, f"      -> ❌ TTS synthesis failed for entry {i + 1}.")
+                    logger.error(f"Синтез речи (TTS) не удался для реплики {i + 1}.")
 
-            update_progress(1.0,
-                            f"\n{'=' * 80}\n🎉 TTS PIPELINE COMPLETED for chapter {context.chapter_id}!\n{'=' * 80}")
+            update_progress(1.0, "Завершено", f"Синтез речи для главы {context.chapter_id} успешно завершен!")
 
         except Exception as e:
-            update_progress(1.0, f"❌ CRITICAL ERROR in TTS pipeline: {e}")
-            import traceback
-            traceback.print_exc()
+            error_msg = f"Критическая ошибка в пайплайне TTS: {e}"
+            update_progress(1.0, "Ошибка", error_msg)
+            logger.error(error_msg, exc_info=True)
+            # Передаем исключение выше, чтобы API мог его поймать и пометить задачу как 'failed'
+            raise
 
     def _create_subtitle_entry(self, audio_file, text, start_time_ms, duration_ms, word_timings):
-        """Creates a structured subtitle entry with word-level timings."""
+        """Создает структурированную запись для файла субтитров."""
         words_data = []
         if word_timings:
             for item in word_timings:

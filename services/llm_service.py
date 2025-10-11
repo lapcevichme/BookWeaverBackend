@@ -3,7 +3,9 @@
 """
 import time
 import re
+import logging
 from typing import Type, TypeVar, Optional
+
 from dotenv import load_dotenv
 import google.generativeai as genai
 from google.generativeai.types import GenerationConfig, RequestOptions
@@ -12,14 +14,19 @@ from pydantic import BaseModel, ValidationError
 # Загружаем переменные окружения, в первую очередь GEMINI_API_KEY
 load_dotenv()
 
+# Получаем логгер для этого модуля
+logger = logging.getLogger(__name__)
+
 # Определяем Generic Type для Pydantic моделей
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
+
 
 class LLMService:
     """
     Централизованный класс для работы с API Google Gemini.
     Обрабатывает вызовы, повторные попытки, парсинг JSON и валидацию.
     """
+
     def __init__(self, model_name: str, temperature: float = 0.5):
         """
         Инициализирует сервис с конкретной моделью.
@@ -27,18 +34,20 @@ class LLMService:
         self.model_name = model_name
         self.config = GenerationConfig(
             temperature=temperature,
-            response_mime_type="application/json" # Исправлено на правильный MIME-тип
+            response_mime_type="application/json"
         )
         self.model = genai.GenerativeModel(self.model_name)
-        print(f"✅ Сервис LLMService для модели '{self.model_name}' инициализирован.")
+        logger.info(f"Сервис LLMService для модели '{self.model_name}' инициализирован.")
 
     def _sanitize_json_string(self, raw_text: str) -> str:
         """
-        Очищает строку от невидимых управляющих символов, которые ломают JSON.
+        Очищает строку от невидимых управляющих символов, которые могут сломать JSON.
         """
-        # Regex для поиска управляющих символов (от U+0000 до U+001F)
         control_char_regex = re.compile(r'[\x00-\x1F]')
-        return control_char_regex.sub('', raw_text)
+        sanitized_text = control_char_regex.sub('', raw_text)
+        if len(raw_text) != len(sanitized_text):
+            logger.debug("Обнаружены и удалены управляющие символы из ответа LLM.")
+        return sanitized_text
 
     def _extract_json_from_response(self, text: str) -> Optional[str]:
         """
@@ -47,29 +56,32 @@ class LLMService:
         # Ищем JSON, заключенный в ```json ... ```
         match = re.search(r'```json\s*(\{.*}|\[.*])\s*```', text, re.DOTALL)
         if match:
+            logger.debug("JSON извлечен из блока ```json ... ```")
             return match.group(1).strip()
 
         # Если не нашли, ищем первый подходящий JSON-объект в тексте
         match = re.search(r'(\{.*}|\[.*])', text, re.DOTALL)
         if match:
+            logger.debug("JSON извлечен из 'сырого' текста ответа.")
             return match.group(1).strip()
+
+        logger.error("Не удалось найти JSON в ответе модели.")
         return None
 
     def call_for_pydantic(self, pydantic_model: Type[PydanticModel], prompt: str) -> Optional[PydanticModel]:
         """
         Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель.
         """
-        print(f"\\n--- [LLMService] -> [Модель: {self.model_name}] ---")
-        print(f"    - Размер промпта: ~{len(prompt)} символов")
+        logger.info(f"Вызов LLM (модель: {self.model_name}) для Pydantic-модели: {pydantic_model.__name__}")
+        logger.debug(f"Размер промпта: ~{len(prompt)} символов")
 
         response_text = None
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                print(f"    - Отправка запроса (попытка {attempt + 1}/{max_retries})...")
+                logger.info(f"Отправка запроса к LLM... (Попытка {attempt + 1}/{max_retries})")
 
-                # Используем специальный тип RequestOptions для большей надежности
-                request_options = RequestOptions(timeout=120)
+                request_options = RequestOptions(timeout=120) # Устанавливаем таймаут 2 минуты
 
                 response = self.model.generate_content(
                     prompt,
@@ -82,46 +94,42 @@ class LLMService:
                     },
                     request_options=request_options
                 )
-                print("    - ✅ Ответ успешно получен.")
 
-                # Улучшенная проверка на заблокированный контент
                 if not response.candidates:
-                    block_reason = "Unknown"
-                    if response.prompt_feedback:
-                         block_reason = response.prompt_feedback.block_reason
-                    print(f"    - ❌ ЗАПРОС ЗАБЛОКИРОВАН! Причина: {block_reason}. Прекращаю попытки.")
+                    block_reason = "Причина неизвестна"
+                    if response.prompt_feedback and hasattr(response.prompt_feedback, 'block_reason'):
+                         block_reason = response.prompt_feedback.block_reason.name
+                    logger.error(f"Запрос к LLM заблокирован! Причина: {block_reason}. Прекращаю попытки.")
                     return None
 
                 response_text = response.text
-                break # Успех, выходим из цикла ретраев
+                logger.info("Ответ от LLM успешно получен.")
+                break
 
             except Exception as e:
-                print(f"    - ⚠️ Ошибка API: {e}. Повторная попытка через {2 ** attempt * 2} сек.")
-                time.sleep(2 ** attempt * 2)
+                wait_time = 2 ** attempt * 2
+                logger.warning(f"Ошибка при вызове API Gemini: {e}. Повторная попытка через {wait_time} сек.", exc_info=True)
+                time.sleep(wait_time)
 
         if not response_text:
-            print(f"    - ❌ Не удалось получить ответ от модели после {max_retries} попыток.")
+            logger.error(f"Не удалось получить ответ от модели '{self.model_name}' после {max_retries} попыток.")
             return None
 
-        # 1. САНАТИЗАЦИЯ ответа
         sanitized_text = self._sanitize_json_string(response_text)
-
-        # 2. Извлечение JSON
         json_str = self._extract_json_from_response(sanitized_text)
 
         if not json_str:
-            print("    - ❌ Не удалось извлечь JSON из ответа модели.")
-            print(f"      -> Ответ модели (первые 200 символов): {response_text[:200]}...")
+            logger.error("Не удалось извлечь JSON из ответа модели.")
+            logger.debug(f"Полный ответ модели (проблема с JSON): \n{response_text}")
             return None
 
-        # 3. Валидация через Pydantic
         try:
             validated_obj = pydantic_model.model_validate_json(json_str)
-            print("    - ✅ JSON-ответ успешно валидирован по Pydantic-модели.")
+            logger.info(f"JSON-ответ успешно валидирован по модели {pydantic_model.__name__}.")
             return validated_obj
         except ValidationError as e:
-            print("    - ❌ ОШИБКА ВАЛИДАЦИИ Pydantic: Ответ модели не соответствует схеме.")
-            print(e)
+            logger.error(f"ОШИБКА ВАЛИДАЦИИ Pydantic для модели {pydantic_model.__name__}. Ответ модели не соответствует схеме.")
+            # Логируем детали ошибки и проблемный JSON для легкой отладки
+            logger.debug(f"Детали ошибки Pydantic: {e}")
+            logger.debug(f"JSON, вызвавший ошибку: \n{json_str}")
             return None
-
-

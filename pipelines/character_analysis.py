@@ -1,7 +1,8 @@
 """
-Пайплайн для анализа персонажей по всему тексту книги с использованием подхода с патчем
+Пайплайн для анализа персонажей по всему тексту книги с использованием подхода с патчем.
 """
 import json
+import logging
 from typing import List, Optional, Callable
 
 from core.project_context import ProjectContext
@@ -9,6 +10,9 @@ from core.data_models import Character, CharacterArchive, CharacterReconResult, 
 from services.llm_service import LLMService
 from utils import file_utils
 from pipelines import prompts
+
+# Получаем логгер для этого модуля
+logger = logging.getLogger(__name__)
 
 
 class CharacterAnalysisPipeline:
@@ -22,22 +26,19 @@ class CharacterAnalysisPipeline:
     def __init__(self, fast_llm: LLMService, powerful_llm: LLMService):
         self.fast_llm = fast_llm
         self.powerful_llm = powerful_llm
-        print("✅ Пайплайн CharacterAnalysisPipeline (v3, Smart Recon) инициализирован.")
+        logger.info("✅ Пайплайн CharacterAnalysisPipeline инициализирован.")
 
-    def run(self, book_name: str, progress_callback: Optional[Callable[[float, str], None]] = None):
+    def run(self, book_name: str, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
         Запускает полный процесс анализа для книги, указанной в контексте.
-        ДОБАВЛЕНО: `progress_callback` для интеграции с API.
         """
-        # --- Вспомогательная функция для обновления прогресса ---
-        def update_progress(progress: float, message: str):
+        def update_progress(progress: float, stage: str, message: str):
+            logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
             if progress_callback:
-                progress_callback(progress, message)
-            print(message)
+                progress_callback(progress, stage, message)
 
-        update_progress(0.0, "\n" + "=" * 80)
-        update_progress(0.0, f"🚀 ЗАПУСК ПАЙПЛАЙНА: Анализ персонажей в книге '{book_name}' 🚀")
-        update_progress(0.0, "=" * 80)
+        stage = "Подготовка"
+        update_progress(0.0, stage, f"Запуск анализа персонажей для книги '{book_name}'")
 
         try:
             context = ProjectContext(book_name=book_name)
@@ -45,82 +46,79 @@ class CharacterAnalysisPipeline:
 
             all_chapters = file_utils.get_all_chapters(context.book_dir)
             if not all_chapters:
-                update_progress(1.0, f"❌ КРИТИЧЕСКАЯ ОШИБКА: Не найдено глав для анализа в {context.book_dir}")
+                update_progress(1.0, "Ошибка", f"В проекте не найдено глав для анализа.")
                 return
 
             master_archive = context.load_character_archive()
-            update_progress(0.05, f"Загружен существующий архив. Персонажей: {len(master_archive.characters)}")
+            update_progress(0.05, stage, f"Загружен архив. Существующих персонажей: {len(master_archive.characters)}")
 
             total_chapters = len(all_chapters)
-            update_progress(0.1, f"Найдено {total_chapters} глав. Начинаю обработку...")
+            update_progress(0.1, stage, f"Найдено {total_chapters} глав. Начинаю обработку...")
 
+            stage = "Анализ глав"
             for i, (vol_path, chap_path) in enumerate(all_chapters):
-                # Рассчитываем прогресс для текущей главы
                 progress = 0.1 + (i / total_chapters) * 0.9
-
                 vol_num = int(vol_path.name.split('_')[-1])
                 chap_num = int(chap_path.stem.split('_')[-1])
                 chapter_id = f"vol_{vol_num}_chap_{chap_num}"
 
-                update_progress(progress, f"\n--- Обработка главы [{i+1}/{total_chapters}]: {chap_path.name} ---")
+                logger.info(f"--- Обработка главы [{i+1}/{total_chapters}]: {chap_path.name} ---")
 
                 if self._is_chapter_processed(master_archive, chapter_id):
-                    update_progress(progress, f"   -> ✅ Глава {chapter_id} уже была проанализирована ранее. Пропускаю.")
+                    logger.info(f"Глава {chapter_id} уже была проанализирована. Пропуск.")
                     continue
 
                 chapter_text = chap_path.read_text("utf-8")
                 if not chapter_text.strip():
-                    update_progress(progress, "   -> ⚠️ Глава пуста. Пропускаю.")
+                    logger.warning(f"Файл главы {chap_path.name} пуст. Пропуск.")
                     continue
 
                 # --- ШАГ 1: "Умная разведка" ---
+                update_progress(progress, stage, f"Глава {i+1}/{total_chapters}: Поиск упоминаний персонажей...")
                 recon_result = self._perform_recon(master_archive, chapter_text)
 
                 if not recon_result or (not recon_result.mentioned_existing_characters and not recon_result.newly_discovered_names):
-                    update_progress(progress, "   -> ⚠️ 'Разведка' не нашла релевантных персонажей в главе. Пропускаю.")
+                    logger.info("'Разведка' не нашла релевантных персонажей в главе. Пропуск.")
                     continue
 
                 all_relevant_names = recon_result.mentioned_existing_characters + recon_result.newly_discovered_names
-                update_progress(progress, f"   -> Найдено {len(all_relevant_names)} релевантных персонажей: {all_relevant_names}")
+                logger.info(f"Найдено {len(all_relevant_names)} релевантных персонажей: {all_relevant_names}")
 
                 # --- ШАГ 2: Фильтрация в Python ---
                 relevant_chars = self._filter_archive(master_archive, recon_result.mentioned_existing_characters)
                 relevant_chars_json = json.dumps([char.model_dump() for char in relevant_chars], ensure_ascii=False, indent=2)
 
                 # --- ШАГ 3: "Операция" - запрос патча ---
+                update_progress(progress, stage, f"Глава {i+1}/{total_chapters}: Глубокий анализ и сбор данных...")
                 patch_list = self._perform_operation(relevant_chars_json, chapter_text, vol_num, chap_num)
 
                 if not patch_list or not patch_list.patches:
-                    update_progress(progress, "   -> ⚠️ LLM не вернула патчей. Считаем, что в главе не было изменений.")
+                    logger.warning("LLM не вернула патчей. Считаем, что в главе не было значимых изменений.")
                     master_archive = self._add_empty_mentions(master_archive, recon_result.mentioned_existing_characters, chapter_id)
                     master_archive.save(context.get_character_archive_path())
-                    update_progress(progress, "   -> Добавлены пустые упоминания для найденных персонажей.")
+                    logger.info("Добавлены пустые упоминания для найденных персонажей.")
                     continue
 
                 # --- ШАГ 4: Применение патча ---
-                update_progress(progress, f"   -> Шаг 3: Применение {len(patch_list.patches)} патчей к архиву...")
+                update_progress(progress, stage, f"Глава {i+1}/{total_chapters}: Обновление архива персонажей...")
                 master_archive = self._apply_patch(master_archive, patch_list, vol_num, chap_num)
-                update_progress(progress, f"   -> ✅ Архив обновлен. Текущее кол-во персонажей: {len(master_archive.characters)}")
+                logger.info(f"Архив обновлен. Текущее кол-во персонажей: {len(master_archive.characters)}")
                 master_archive.save(context.get_character_archive_path())
 
-            final_message_header = "\n" + "=" * 80 + "\n🎉 Анализ персонажей успешно завершен!"
-            final_message_body = (
-                f"   Итоговый архив сохранен в: {context.get_character_archive_path()}\n"
-                f"   Всего найдено уникальных персонажей: {len(master_archive.characters)}\n"
-                + "=" * 80
-            )
-            update_progress(1.0, final_message_header + "\n" + final_message_body)
-
+            stage = "Завершение"
+            final_message = f"Анализ персонажей завершен. Всего в архиве: {len(master_archive.characters)}."
+            update_progress(1.0, stage, final_message)
+            logger.info(f"Итоговый архив сохранен в: {context.get_character_archive_path()}")
 
         except Exception as e:
-            error_message = f"❌ КРИТИЧЕСКАЯ НЕПРЕДВИДЕННАЯ ОШИБКА в пайплайне: {e}"
-            update_progress(1.0, error_message)
-            import traceback
-            traceback.print_exc()
+            error_msg = f"Критическая ошибка в пайплайне анализа персонажей: {e}"
+            update_progress(1.0, "Ошибка", error_msg)
+            logger.error(error_msg, exc_info=True)
+            raise
 
     def _perform_recon(self, archive: CharacterArchive, chapter_text: str) -> Optional[CharacterReconResult]:
         """Этап 'Разведки': быстрый поиск упоминаний."""
-        print("   -> Шаг 1: 'Умная разведка' - сопоставление с известными и поиск новых...")
+        logger.info("Шаг 1: 'Умная разведка' - сопоставление с известными и поиск новых...")
         known_chars_for_recon = [
             {"name": char.name, "aliases": char.aliases}
             for char in archive.characters
@@ -131,7 +129,7 @@ class CharacterAnalysisPipeline:
 
     def _perform_operation(self, relevant_chars_json: str, chapter_text: str, vol_num: int, chap_num: int) -> Optional[CharacterPatchList]:
         """Этап 'Операции': глубокий анализ и создание патча."""
-        print("   -> Шаг 2: 'Операция' - запрос патча с изменениями...")
+        logger.info("Шаг 2: 'Операция' - запрос патча с изменениями...")
         patch_prompt = prompts.format_character_patch_prompt(
             relevant_chars_json, chapter_text, vol_num, chap_num
         )
@@ -152,6 +150,7 @@ class CharacterAnalysisPipeline:
 
     def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int, chap: int) -> CharacterArchive:
         """Применяет патчи к мастер-архиву."""
+        logger.info(f"Применение {len(patch_list.patches)} патчей к архиву...")
         char_map = {char.name: char for char in archive.characters}
         for patch in patch_list.patches:
             existing_char = char_map.get(patch.name)
@@ -173,6 +172,7 @@ class CharacterAnalysisPipeline:
                 }
                 new_char = Character(**new_char_data)
                 char_map[patch.name] = new_char
+                logger.info(f"Обнаружен и добавлен новый персонаж: {patch.name}")
         archive.characters = list(char_map.values())
         return archive
 
@@ -183,4 +183,3 @@ class CharacterAnalysisPipeline:
                 if chapter_id not in char.chapter_mentions:
                     char.chapter_mentions[chapter_id] = "Персонаж упоминается в главе, но без значимых действий."
         return archive
-

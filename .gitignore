@@ -23,6 +23,7 @@ was_in_root/
 *.zip
 *.srt
 *.env
+*.log
 # 6. Исключение: НЕ игнорируем нужные .wav файлы (исходники)
 #!input/voices/*.wav
 

@@ -3,6 +3,7 @@
 """
 import json
 from typing import List, Dict, Optional, Callable
+import logging
 
 import config
 from core.project_context import ProjectContext
@@ -17,6 +18,7 @@ from core.data_models import (
 from services.llm_service import LLMService
 from pipelines import prompts
 
+logger = logging.getLogger(__name__)
 
 class ScenarioGenerationPipeline:
     """
@@ -27,38 +29,36 @@ class ScenarioGenerationPipeline:
         self.fast_llm = fast_llm
         self.powerful_llm = powerful_llm
         self._load_libraries()
-        print("✅ Пайплайн ScenarioGenerationPipeline инициализирован.")
+        logger.info("✅ Пайплайн ScenarioGenerationPipeline инициализирован.")
 
     def _load_libraries(self):
         """Загружает вспомогательные библиотеки (эмбиент, эмоции)."""
-        print("   -> Загрузка библиотек для генерации сценария...")
+        logger.info("Загрузка библиотек для генерации сценария...")
         try:
             self.ambient_library = json.loads(config.AMBIENT_LIBRARY_FILE.read_text("utf-8"))
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"   -> ⚠️ Не удалось загрузить библиотеку эмбиента: {e}")
+            logger.warning(f"Не удалось загрузить библиотеку эмбиента: {e}")
             self.ambient_library = []
 
         try:
             self.emotion_library = json.loads(config.EMOTION_REFERENCE_LIBRARY_FILE.read_text("utf-8"))
             self.available_emotions = list(self.emotion_library.keys())
         except (FileNotFoundError, json.JSONDecodeError) as e:
-            print(f"   -> ⚠️ Не удалось загрузить библиотеку эмоций: {e}")
+            logger.warning(f"Не удалось загрузить библиотеку эмоций: {e}")
             self.emotion_library = {}
             self.available_emotions = []
 
-    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str], None]] = None):
+    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
         Запускает полный процесс генерации сценария для главы, указанной в контексте.
-        ДОБАВЛЕНО: `progress_callback` для отслеживания состояния из API.
         """
-        def update_progress(progress: float, message: str):
+        def update_progress(progress: float, stage: str, message: str):
             if progress_callback:
-                progress_callback(progress, message)
-            print(message) # Продолжаем выводить в консоль для отладки
+                progress_callback(progress, stage, message)
+            # Логируем то же сообщение, что отправляем на фронтенд
+            logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
 
-        update_progress(0.0, "\n" + "=" * 80)
-        update_progress(0.0, f"🚀 ЗАПУСК ПАЙПЛАЙНА: Генерация сценария для главы {context.chapter_id} 🚀")
-        update_progress(0.0, "=" * 80)
+        update_progress(0.0, "Начало", f"Запуск генерации сценария для главы {context.chapter_id}")
 
         try:
             context.ensure_dirs()
@@ -67,65 +67,74 @@ class ScenarioGenerationPipeline:
             ambient_enriched_path = context.chapter_output_dir / "temp_ambient_enriched.json"
 
             # --- Шаг 1: Загрузка исходных данных ---
-            update_progress(0.1, "\n--- Шаг 1: Загрузка исходных данных ---")
+            stage = "Загрузка данных"
+            update_progress(0.1, stage, "Загрузка архива персонажей...")
             character_archive = context.load_character_archive()
+            update_progress(0.12, stage, "Загрузка архива пересказов...")
             summary_archive = context.load_summary_archive()
-            update_progress(0.15, f"   -> Архивы персонажей ({len(character_archive.characters)} шт.) и пересказов ({len(summary_archive.summaries)} шт.) успешно загружены.")
+            update_progress(0.15, stage,
+                            f"Архивы персонажей ({len(character_archive.characters)} шт.) и пересказов ({len(summary_archive.summaries)} шт.) успешно загружены.")
 
             # --- Шаг 2: Генерация "сырого" сценария ---
-            update_progress(0.2, "") # Пустая строка для перевода строки
+            stage = "Генерация сценария"
             if raw_scenario_path.exists():
-                update_progress(0.2, f"--- Шаг 2: Генерация 'сырого' сценария (пропущено, используется кэш) ---")
+                update_progress(0.2, stage, "Обнаружен кэш 'сырого' сценария, используется он.")
                 raw_scenario = RawScenario.model_validate_json(raw_scenario_path.read_text("utf-8"))
             else:
-                update_progress(0.2, "--- Шаг 2: Генерация 'сырого' сценария ---")
+                update_progress(0.2, stage, "Фильтрация персонажей для контекста...")
                 contextual_characters = self._get_contextual_characters(character_archive, context.chapter_id)
+                update_progress(0.25, stage, "Отправка запроса к LLM для генерации 'сырого' сценария...")
                 raw_scenario = self._generate_raw_scenario(context, contextual_characters, summary_archive)
-                if not raw_scenario: return
+                if not raw_scenario:
+                    raise ValueError("LLM не смогла сгенерировать 'сырой' сценарий.")
                 raw_scenario_path.write_text(raw_scenario.model_dump_json(indent=2), encoding="utf-8")
-                update_progress(0.5, f"   -> Промежуточный результат сохранен в {raw_scenario_path.name}")
+                update_progress(0.5, stage, f"Промежуточный результат сохранен в {raw_scenario_path.name}")
 
             scenario_as_dicts = [entry.model_dump() for entry in raw_scenario.scenario]
 
             # --- Шаг 3: Обогащение эмбиентом ---
-            update_progress(0.55, "")
+            stage = "Анализ эмбиента"
             if ambient_enriched_path.exists():
-                 update_progress(0.55, f"--- Шаг 3: Обогащение эмбиентом (пропущено, используется кэш) ---")
-                 ambient_enriched_scenario = json.loads(ambient_enriched_path.read_text("utf-8"))
+                update_progress(0.55, stage, "Обнаружен кэш данных по эмбиенту, используется он.")
+                ambient_enriched_scenario = json.loads(ambient_enriched_path.read_text("utf-8"))
             else:
-                update_progress(0.55, "--- Шаг 3: Обогащение сценария эмбиентом ---")
+                update_progress(0.55, stage, "Отправка запроса к LLM для анализа эмбиента...")
                 ambient_enriched_scenario = self._enrich_with_ambient(context, scenario_as_dicts)
-                ambient_enriched_path.write_text(json.dumps(ambient_enriched_scenario, indent=2, ensure_ascii=False), encoding="utf-8")
-                update_progress(0.7, f"   -> Промежуточный результат сохранен в {ambient_enriched_path.name}")
+                ambient_enriched_path.write_text(json.dumps(ambient_enriched_scenario, indent=2, ensure_ascii=False),
+                                                 encoding="utf-8")
+                update_progress(0.7, stage, f"Промежуточный результат сохранен в {ambient_enriched_path.name}")
 
             # --- Шаг 4: Обогащение эмоциями ---
-            update_progress(0.75, "\n--- Шаг 4: Обогащение сценария эмоциями ---")
-            emotion_enriched_scenario = self._enrich_with_emotions(ambient_enriched_scenario, character_archive, context.chapter_id)
+            stage = "Анализ эмоций"
+            update_progress(0.75, stage, "Отправка запроса к LLM для анализа эмоций...")
+            emotion_enriched_scenario = self._enrich_with_emotions(ambient_enriched_scenario, character_archive,
+                                                                   context.chapter_id)
+            update_progress(0.85, stage, "Анализ эмоций завершен.")
 
             # --- Шаг 5: Финальная обработка и сохранение ---
-            update_progress(0.9, "\n--- Шаг 5: Финализация и сохранение ---")
+            stage = "Финализация"
+            update_progress(0.9, stage, "Сборка финального сценария...")
             final_entries = [ScenarioEntry(**entry_data) for entry_data in emotion_enriched_scenario]
             final_scenario = Scenario(entries=final_entries)
+            update_progress(0.95, stage, "Сохранение файла сценария на диск...")
             final_scenario.save(context.scenario_file)
 
             # --- Шаг 6: Очистка временных файлов ---
             raw_scenario_path.unlink(missing_ok=True)
             ambient_enriched_path.unlink(missing_ok=True)
-            update_progress(0.95, "\n--- Шаг 6: Временные файлы кэша удалены ---")
+            update_progress(0.98, stage, "Временные файлы кэша удалены.")
 
-
-            update_progress(1.0, "\n" + "=" * 80)
-            update_progress(1.0, f"🎉 Сценарий для главы {context.chapter_id} успешно сгенерирован!")
-            update_progress(1.0, f"   -> Финальный файл: {context.scenario_file}")
-            update_progress(1.0, "=" * 80)
+            update_progress(1.0, "Завершено", f"Сценарий для главы {context.chapter_id} успешно сгенерирован!")
 
         except FileNotFoundError as e:
-            update_progress(1.0, f"❌ КРИТИЧЕСКАЯ ОШИБКА: {e}")
-            raise e # Передаем исключение выше, чтобы API мог его поймать
+            error_msg = f"Критическая ошибка: Файл не найден - {e}"
+            update_progress(1.0, "Ошибка", error_msg)
+            logger.error(error_msg, exc_info=True)
+            raise e
         except Exception as e:
-            update_progress(1.0, f"❌ КРИТИЧЕСКАЯ НЕПРЕДВИДЕННАЯ ОШИБКА в пайплайне: {e}")
-            import traceback
-            traceback.print_exc()
+            error_msg = f"Непредвиденная ошибка: {e}"
+            update_progress(1.0, "Ошибка", error_msg)
+            logger.error(f"Критическая непредвиденная ошибка в пайплайне", exc_info=True)
             raise e
 
     def _get_contextual_characters(self, archive: CharacterArchive, chapter_id: str) -> CharacterArchive:
@@ -133,9 +142,9 @@ class ScenarioGenerationPipeline:
         Фильтрует полный архив и возвращает НОВЫЙ ОБЪЕКТ CharacterArchive
         только с релевантными для главы персонажами.
         """
-        print("   -> Фильтрация персонажей для создания контекстного списка...")
+        logger.debug("Фильтрация персонажей для создания контекстного списка...")
         contextual_chars = [char for char in archive.characters if chapter_id in char.chapter_mentions]
-        print(f"   -> Найдено {len(contextual_chars)} действующих лиц в главе.")
+        logger.debug(f"Найдено {len(contextual_chars)} действующих лиц в главе.")
         return CharacterArchive(characters=contextual_chars)
 
     def _generate_raw_scenario(
@@ -151,9 +160,9 @@ class ScenarioGenerationPipeline:
         synopsis_text = chapter_summary_data.synopsis if chapter_summary_data else None
 
         if synopsis_text:
-            print("   -> Найден конспект главы. Он будет использован как дополнительный контекст.")
+            logger.debug("Найден конспект главы. Он будет использован как дополнительный контекст.")
         else:
-            print("   -> ⚠️ Конспект для главы не найден. Генерация будет идти только по тексту.")
+            logger.info("Конспект для главы не найден. Генерация будет идти только по тексту.")
 
         prompt = prompts.format_scenario_generation_prompt(
             context,
@@ -170,12 +179,12 @@ class ScenarioGenerationPipeline:
         ambient_data = self.fast_llm.call_for_pydantic(AmbientTransitionList, prompt)
 
         if not ambient_data or not ambient_data.transitions:
-            print("   -> ⚠️ Не найдено точек смены эмбиента. Вся глава будет без фоновых звуков.")
+            logger.warning("Не найдено точек смены эмбиента. Вся глава будет без фоновых звуков.")
             for entry in entries:
                 entry['ambient'] = 'none'
             return entries
 
-        print(f"   -> Найдено {len(ambient_data.transitions)} точек смены эмбиента.")
+        logger.info(f"Найдено {len(ambient_data.transitions)} точек смены эмбиента.")
         current_ambient = "none"
         transition_idx = 0
         for entry in entries:
@@ -186,9 +195,8 @@ class ScenarioGenerationPipeline:
                     current_ambient = transition.ambientSoundId
                     entry['ambient'] = current_ambient
                     transition_idx += 1
-                    print(f"      -> Эмбиент изменен на '{current_ambient}'")
+                    logger.debug(f"Эмбиент изменен на '{current_ambient}'")
         return entries
-
 
     def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str) -> List[Dict]:
         """
@@ -196,7 +204,7 @@ class ScenarioGenerationPipeline:
         Это включает в себя и диалоги, и внутренние монологи.
         """
         if not self.available_emotions:
-            print("   -> ⚠️ Список доступных эмоций пуст. Анализ эмоций пропускается.")
+            logger.warning("Список доступных эмоций пуст. Анализ эмоций пропускается.")
             for entry in entries:
                 if entry.get('speaker') != "Рассказчик":
                     entry['emotion'] = 'нейтрально'
@@ -208,7 +216,7 @@ class ScenarioGenerationPipeline:
                 replicas_to_analyze.append({"id": str(i), "speaker": entry['speaker'], "text": entry['text']})
 
         if not replicas_to_analyze:
-            print("   -> В главе нет реплик персонажей для анализа эмоций.")
+            logger.info("В главе нет реплик персонажей для анализа эмоций.")
             return entries
 
         char_profiles = {
@@ -222,17 +230,17 @@ class ScenarioGenerationPipeline:
         emotion_map_data = self.fast_llm.call_for_pydantic(EmotionMap, prompt)
 
         if not emotion_map_data:
-            print("   -> ❌ LLM не смогла проанализировать эмоции.")
+            logger.error("LLM не смогла проанализировать эмоции.")
             return entries
 
-        print(f"   -> ✅ LLM успешно проанализировала {len(emotion_map_data.emotions)} реплик.")
+        logger.info(f"LLM успешно проанализировала {len(emotion_map_data.emotions)} реплик.")
         for entry_id_str, emotion in emotion_map_data.emotions.items():
             try:
                 entry_id = int(entry_id_str)
                 if entry_id < len(entries):
                     entries[entry_id]['emotion'] = emotion
             except (ValueError, IndexError):
-                print(f"   -> ⚠️ LLM вернула некорректный ID реплики: '{entry_id_str}'. Пропускаю.")
+                logger.warning(f"LLM вернула некорректный ID реплики: '{entry_id_str}'. Пропускаю.")
                 continue
         return entries
 
