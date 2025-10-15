@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 from pathlib import Path
+from typing import Tuple, List
+import re
 import config
 from core.data_models import Scenario, CharacterArchive, ChapterSummaryArchive, BookManifest
 
@@ -16,7 +18,7 @@ class ProjectContext:
 
     def __init__(self, book_name: str, volume_num: int | None = None, chapter_num: int | None = None):
         """
-        ИСПРАВЛЕНО: volume_num и chapter_num теперь необязательные.
+        volume_num и chapter_num теперь необязательные.
         Это позволяет создавать контекст для всей книги (например, для анализа персонажей),
         не указывая конкретную главу.
         """
@@ -32,6 +34,8 @@ class ProjectContext:
         self.character_archive_file = self.book_output_dir / "character_archive.json"
         self.summary_archive_file = self.book_output_dir / "chapter_summaries.json"
         self.manifest_file = self.book_output_dir / "manifest.json"
+        self.cover_file = self.book_output_dir / "cover.jpg"
+
 
         # --- Пути уровня главы (определяются, только если переданы номера) ---
         if volume_num is not None and chapter_num is not None:
@@ -127,3 +131,28 @@ class ProjectContext:
         if not hasattr(self, 'subtitles_file'):
             raise AttributeError("Контекст не инициализирован для конкретной главы (отсутствует subtitles_file).")
         return self.subtitles_file
+
+    def discover_chapters(self) -> List[Tuple[int, int]]:
+        """
+        Сканирует директорию книги и находит все существующие главы.
+        Возвращает список кортежей (номер_тома, номер_главы).
+        """
+        chapters = []
+        if not self.book_dir.is_dir():
+            return chapters
+
+        for vol_dir in sorted(self.book_dir.glob("vol_*")):
+            if not vol_dir.is_dir():
+                continue
+            vol_match = re.match(r"vol_(\d+)", vol_dir.name)
+            if not vol_match:
+                continue
+            vol_num = int(vol_match.group(1))
+
+            for chap_file in sorted(vol_dir.glob("chapter_*.txt")):
+                chap_match = re.match(r"chapter_(\d+)\.txt", chap_file.name)
+                if not chap_match:
+                    continue
+                chap_num = int(chap_match.group(1))
+                chapters.append((vol_num, chap_num))
+        return chapters

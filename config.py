@@ -16,6 +16,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 PROMPTS_DIR = INPUT_DIR / "prompts"
 VOICES_DIR = INPUT_DIR / "voices"
 EMOTION_REFERENCES_DIR = INPUT_DIR / "emotion_references"
+AMBIENT_DIR = INPUT_DIR / "ambient"
 
 # Файлы-библиотеки и словари
 PRONUNCIATION_DICT_FILE = INPUT_DIR / "pronunciation_dictionary.json"
