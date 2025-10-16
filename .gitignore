@@ -14,8 +14,7 @@ __pycache__/
 # 4. Игнорируем все папки с результатами работы
 input/
 output/
-output_monolog/
-to_telegram/
+export/
 was_in_root/
 
 # 5. Игнорируем сгенерированные файлы в корне проекта
