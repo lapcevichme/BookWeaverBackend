@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 import config
 from core.project_context import ProjectContext
 from utils.book_converter import BookConverter
-from api.models import BookArtifactName, ChapterArtifactName
+from api.models import BookArtifactName, ChapterArtifactName, BookStatusResponse
 from utils.exporter import BookExporter
 
 logger = logging.getLogger(__name__)
@@ -200,3 +200,35 @@ async def get_chapter_audio_file(book_name: str, volume_num: int, chapter_num: i
 
     return FileResponse(audio_file_path, media_type="audio/wav")
 
+
+@router.get("/{book_name}/status", response_model=BookStatusResponse)
+async def get_project_status(book_name: str):
+    """
+    Возвращает агрегированную сводку о готовности всего проекта.
+    Быстро сканирует артефакты всех глав.
+    """
+    context = ProjectContext(book_name=book_name)
+    if not context.book_dir.exists() or not context.book_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
+
+    status = BookStatusResponse(book_name=book_name)
+
+    discovered_chapters = context.discover_chapters()
+    status.total_chapters = len(discovered_chapters)
+
+    if status.total_chapters == 0:
+        return status  # Возвращаем пустой статус, если глав нет
+
+    for vol_num, chap_num in discovered_chapters:
+        chapter_context = ProjectContext(book_name, vol_num, chap_num)
+        chapter_status = chapter_context.check_chapter_status()
+
+        if chapter_status.get('has_scenario'):
+            status.chapters_with_scenario += 1
+        if chapter_status.get('has_audio'):
+            status.chapters_with_tts += 1
+
+    # Проект готов к экспорту, если хотя бы одна глава полностью готова
+    status.is_ready_for_export = status.chapters_with_tts > 0
+
+    return status

@@ -2,7 +2,7 @@
 Этот файл содержит все Pydantic-модели, используемые в разных частях API.
 Это помогает избежать циклических импортов.
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Literal
 from enum import Enum
 
@@ -43,3 +43,14 @@ class AmbientMetadata(BaseModel):
     id: str
     description: str
     tags: List[str]
+
+class BookStatusResponse(BaseModel):
+    book_name: str
+    total_chapters: int = 0
+    chapters_with_scenario: int = 0
+    chapters_with_tts: int = 0
+    is_ready_for_export: bool = Field(
+        False,
+        description="True, если хотя бы одна глава полностью готова (сценарий + TTS)."
+    )
+
