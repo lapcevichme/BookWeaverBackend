@@ -55,34 +55,49 @@ async def import_project(file: UploadFile = File(...)):
             temp_file_path.unlink()
 
 
+
 @router.get("/{book_name}/export", response_class=FileResponse)
 async def export_project(book_name: str):
     """
-    Собирает проект в портативный .bw архив и возвращает его для скачивания.
+    Собирает готовый проект в .bw архив и отдает его для скачивания.
+    Предварительно проверяет, готов ли проект к экспорту.
     """
-    # Sanitize book_name to prevent directory traversal attacks
-    if ".." in book_name or "/" in book_name:
-        raise HTTPException(status_code=400, detail="Недопустимое имя книги.")
-
+    # TODO: тут ввели логику, что должно быть аудио, но наверное достаточно манифеста (подумать)
     context = ProjectContext(book_name=book_name)
-    if not context.book_dir.exists():
-        raise HTTPException(status_code=404, detail=f"Проект '{book_name}' не найден.")
+    if not context.book_dir.exists() or not context.book_dir.is_dir():
+        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
+
+    discovered_chapters = context.discover_chapters()
+    chapters_with_tts = 0
+    if discovered_chapters:
+        for vol_num, chap_num in discovered_chapters:
+            chapter_context = ProjectContext(book_name, vol_num, chap_num)
+            chapter_status = chapter_context.check_chapter_status()
+            if chapter_status.get('has_audio'):
+                chapters_with_tts += 1
+
+    if chapters_with_tts == 0:
+        raise HTTPException(
+            status_code=412, # Precondition Failed
+            detail="Проект не готов к экспорту. Нет ни одной полностью озвученной главы."
+        )
 
     try:
         exporter = BookExporter(book_name=book_name)
         archive_path = exporter.export()
 
-        if not archive_path or not archive_path.exists():
-            raise HTTPException(status_code=500, detail="Процесс экспорта не смог создать файл архива.")
-
+        # Отдаем файл для скачивания
         return FileResponse(
             path=archive_path,
             filename=archive_path.name,
             media_type='application/zip'
         )
+    except FileNotFoundError as e:
+        logger.error(f"Ошибка экспорта: {e}")
+        raise HTTPException(status_code=404, detail=f"Не удалось найти необходимые файлы для экспорта проекта '{book_name}'.")
     except Exception as e:
-        logger.error(f"Не удалось экспортировать проект {book_name}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера при экспорте: {e}")
+        logger.error(f"Критическая ошибка при экспорте проекта '{book_name}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера при создании архива: {e}")
 
 
 # --- Project Details & Artifacts ---
