@@ -131,7 +131,7 @@ class CharacterAnalysisPipeline:
         powerful_llm = self.model_manager.get_llm_service('scenario_generator')
         logger.info("Шаг 2: 'Операция' - запрос патча с изменениями...")
         patch_prompt = prompts.format_character_patch_prompt(
-            relevant_characters_json=relevant_characters_json,
+            relevant_chars_json=relevant_characters_json,
             newly_discovered_names=newly_discovered_names,
             chapter_text=chapter_text,
             volume=vol_num,
