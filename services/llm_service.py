@@ -6,6 +6,7 @@ from threading import Lock
 
 from dotenv import load_dotenv
 import google.generativeai as genai
+from google.api_core import exceptions
 from google.generativeai.types import GenerationConfig, RequestOptions
 from pydantic import BaseModel, ValidationError
 
@@ -14,10 +15,12 @@ logger = logging.getLogger(__name__)
 
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
 
+
 class LLMService:
     """
     Централизованный класс для работы с API Google Gemini с ленивой инициализацией.
     """
+
     def __init__(self, model_name: str, temperature: float = 0.5):
         self.model_name = model_name
         self.config = GenerationConfig(temperature=temperature, response_mime_type="application/json")
@@ -62,7 +65,6 @@ class LLMService:
                 logger.info(f"Отправка запроса к LLM... (Попытка {attempt + 1}/{max_retries})")
                 request_options = RequestOptions(timeout=120)
 
-                # Используем self.model для ленивой загрузки
                 response = self.model.generate_content(
                     prompt,
                     generation_config=self.config,
@@ -76,23 +78,42 @@ class LLMService:
                 )
 
                 if not response.candidates:
-                    block_reason = response.prompt_feedback.block_reason.name if hasattr(response.prompt_feedback, 'block_reason') else "Причина неизвестна"
+                    block_reason = response.prompt_feedback.block_reason.name if hasattr(response.prompt_feedback,
+                                                                                         'block_reason') else "Причина неизвестна"
                     logger.error(f"Запрос к LLM заблокирован! Причина: {block_reason}. Прекращаю попытки.")
                     return None
 
                 response_text = response.text
                 logger.info("Ответ от LLM успешно получен.")
                 break
+
+            except exceptions.ResourceExhausted as e:
+                # Используем регулярное выражение для поиска задержки в сообщении
+                match = re.search(r"Please retry in ([\d.]+)s", str(e))
+                if match:
+                    delay = float(match.group(1)) + 1  # Добавляем 1 секунду на всякий случай
+                    logger.warning(
+                        f"Ошибка квоты API (429). API рекомендует подождать {delay:.2f} сек. Выполняю ожидание.")
+                    time.sleep(delay)
+                else:
+                    # Если по какой-то причине не нашли, используем старую логику
+                    wait_time = 2 ** (attempt + 1)
+                    logger.warning(
+                        f"Ошибка квоты API (429), но не удалось извлечь время ожидания. Повторная попытка через {wait_time} сек.")
+                    time.sleep(wait_time)
             except Exception as e:
-                wait_time = 2 ** attempt * 2
-                logger.warning(f"Ошибка при вызове API Gemini: {e}. Повторная попытка через {wait_time} сек.", exc_info=True)
+                wait_time = 2 ** (attempt + 1)
+                logger.warning(
+                    f"Неизвестная ошибка при вызове API Gemini: {e}. Повторная попытка через {wait_time} сек.",
+                    exc_info=True)
                 time.sleep(wait_time)
 
         if not response_text:
             logger.error(f"Не удалось получить ответ от модели '{self.model_name}' после {max_retries} попыток.")
             return None
 
-        logger.debug(f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text}\n---------------------------------")
+        logger.debug(
+            f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text}\n---------------------------------")
 
         json_str = self._extract_json_from_response(self._sanitize_json_string(response_text))
         if not json_str:
@@ -102,5 +123,6 @@ class LLMService:
         try:
             return pydantic_model.model_validate_json(json_str)
         except ValidationError as e:
-            logger.error(f"ОШИБКА ВАЛИДАЦИИ Pydantic для {pydantic_model.__name__}.", extra={"pydantic_error": str(e), "invalid_json": json_str})
+            logger.error(f"ОШИБКА ВАЛИДАЦИИ Pydantic для {pydantic_model.__name__}.",
+                         extra={"pydantic_error": str(e), "invalid_json": json_str})
             return None

@@ -189,8 +189,7 @@ class CharacterAnalysisPipeline:
                     description=patch.description or "Описание не предоставлено.",
                     spoiler_free_description=patch.spoiler_free_description or "Описание не предоставлено.",
                     aliases=patch.aliases or [],
-                    chapter_mentions=patch.chapter_mentions or {},
-                    first_mention=f"Том {vol}, Глава {chap}"
+                    chapter_mentions=patch.chapter_mentions or {}
                 )
                 char_map[new_char.id] = new_char
                 logger.info(f"Обнаружен и добавлен новый персонаж: {patch.name} (ID: {new_char.id})")

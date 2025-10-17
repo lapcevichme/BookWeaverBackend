@@ -145,7 +145,6 @@ class Character(BaseModel):
     description: str = Field(description="Детальное, полное описание персонажа, которое может содержать спойлеры.")
     spoiler_free_description: str = Field(description="Краткое описание персонажа без спойлеров.")
     aliases: List[str] = Field(default_factory=list, description="Список альтернативных имен или прозвищ.")
-    first_mention: str = Field(description="Место первого упоминания, например, 'Том 1, Глава 1'.")
     chapter_mentions: Dict[str, str] = Field(default_factory=dict, description="Сводка действий персонажа по главам.")
 
 class CharacterArchive(BaseModel):
