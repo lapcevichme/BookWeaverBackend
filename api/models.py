@@ -3,7 +3,7 @@
 Это помогает избежать циклических импортов.
 """
 from pydantic import BaseModel, Field
-from typing import List, Literal
+from typing import List, Literal, Optional
 from enum import Enum
 
 class ServerStateEnum(str, Enum):
@@ -53,4 +53,16 @@ class BookStatusResponse(BaseModel):
         False,
         description="True, если хотя бы одна глава полностью готова (сценарий + TTS)."
     )
+
+class PlaylistEntry(BaseModel):
+    """Одна запись в плейлисте главы, соответствует одной реплике."""
+    audio_file: str = Field(description="Имя аудиофайла (например, 'narrator_001.wav').")
+    text: str = Field(description="Текст реплики.")
+    speaker: str = Field(description="Имя говорящего персонажа.")
+    ambient: Optional[str] = Field(None, description="ID эмбиент-звука (например, 'forest_day_calm').")
+
+class ChapterPlaylistResponse(BaseModel):
+    """Модель ответа для плейлиста главы."""
+    chapter_id: str
+    entries: List[PlaylistEntry]
 

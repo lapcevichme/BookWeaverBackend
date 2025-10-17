@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse
 import config
 from core.project_context import ProjectContext
 from utils.book_converter import BookConverter
-from api.models import BookArtifactName, ChapterArtifactName, BookStatusResponse
+from api.models import BookArtifactName, ChapterArtifactName, BookStatusResponse, ChapterPlaylistResponse, PlaylistEntry
 from utils.exporter import BookExporter
 
 logger = logging.getLogger(__name__)
@@ -247,3 +247,36 @@ async def get_project_status(book_name: str):
     status.is_ready_for_export = status.chapters_with_tts > 0
 
     return status
+
+# Streaming
+
+@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/playlist", response_model=ChapterPlaylistResponse)
+async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int):
+    """
+    Возвращает "плейлист" для главы, оптимизированный для мобильного плеера.
+    Клиент сначала запрашивает этот плейлист, а затем поочередно
+    запрашивает аудиофайлы и эмбиенты из него.
+    """
+    context = ProjectContext(book_name, volume_num, chapter_num)
+
+    scenario = context.load_scenario()
+    if not scenario:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Сценарий для главы '{context.chapter_id}' не найден. Невозможно создать плейлист."
+        )
+
+    playlist_entries = []
+    for entry in scenario.entries:
+        if entry.audio_file:
+            playlist_entries.append(PlaylistEntry(
+                audio_file=entry.audio_file,
+                text=entry.text,
+                speaker=entry.speaker,
+                ambient=entry.ambient if entry.ambient != "none" else None
+            ))
+
+    return ChapterPlaylistResponse(
+        chapter_id=context.chapter_id,
+        entries=playlist_entries
+    )

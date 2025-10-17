@@ -52,6 +52,9 @@ class LLMService:
     def call_for_pydantic(self, pydantic_model: Type[PydanticModel], prompt: str) -> Optional[PydanticModel]:
         """Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель."""
         logger.info(f"Вызов LLM для Pydantic-модели: {pydantic_model.__name__}")
+
+        logger.debug(f"--- PROMPT SENT TO '{self.model_name}' ---\n{prompt}\n---------------------------------")
+
         response_text = None
         max_retries = 3
         for attempt in range(max_retries):
@@ -88,6 +91,8 @@ class LLMService:
         if not response_text:
             logger.error(f"Не удалось получить ответ от модели '{self.model_name}' после {max_retries} попыток.")
             return None
+
+        logger.debug(f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text}\n---------------------------------")
 
         json_str = self._extract_json_from_response(self._sanitize_json_string(response_text))
         if not json_str:

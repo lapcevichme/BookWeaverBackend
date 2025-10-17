@@ -9,6 +9,8 @@ import os
 import sys
 import logging
 
+from utils.setup_logging import setup_logging
+
 # Добавляем корневую директорию проекта в sys.path
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
@@ -153,6 +155,7 @@ if __name__ == "__main__":
     """
     print("ЗАПУСК В РЕЖИМЕ ОТЛАДКИ (CLI)")
     try:
+        setup_logging()
         # Для CLI-режима мы создаем свой собственный экземпляр ModelManager
         cli_model_manager = ModelManager()
         app = Application(model_manager=cli_model_manager)

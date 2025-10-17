@@ -36,7 +36,6 @@ class ProjectContext:
         self.manifest_file = self.book_output_dir / "manifest.json"
         self.cover_file = self.book_output_dir / "cover.jpg"
 
-
         # --- Пути уровня главы (определяются, только если переданы номера) ---
         if volume_num is not None and chapter_num is not None:
             self.chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
@@ -50,6 +49,17 @@ class ProjectContext:
             self.raw_scenario_cache_file = self.chapter_output_dir / "cache_raw_scenario.json"
             self.ambient_cache_file = self.chapter_output_dir / "cache_ambient.json"
             self.emotion_cache_file = self.chapter_output_dir / "cache_emotion.json"
+
+    @staticmethod
+    def get_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]:
+        """Извлекает номер тома и главы из пути к файлу главы."""
+        vol_match = re.search(r"vol_(\d+)", str(chap_path))
+        chap_match = re.search(r"chapter_(\d+)", str(chap_path.name))
+
+        if not vol_match or not chap_match:
+            raise ValueError(f"Не удалось извлечь номер тома/главы из пути: {chap_path}")
+
+        return int(vol_match.group(1)), int(chap_match.group(1))
 
     def check_chapter_status(self) -> dict:
         """
@@ -91,7 +101,8 @@ class ProjectContext:
     def get_chapter_text(self) -> str:
         """Загружает и возвращает текст указанной главы."""
         if not hasattr(self, 'chapter_file') or not self.chapter_file.exists():
-            raise FileNotFoundError(f"Файл главы не был определен или не найден. Убедитесь, что volume_num и chapter_num были переданы.")
+            raise FileNotFoundError(
+                f"Файл главы не был определен или не найден. Убедитесь, что volume_num и chapter_num были переданы.")
         return self.chapter_file.read_text("utf-8")
 
     def load_character_archive(self) -> CharacterArchive:

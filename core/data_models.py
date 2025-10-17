@@ -5,8 +5,9 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import List, Optional, Dict, Literal
+from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, field_validator, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
 # --- 1. Промежуточные модели (ответы от LLM) ---
@@ -14,26 +15,40 @@ from pydantic import BaseModel, Field, field_validator, ValidationError
 class CharacterReconResult(BaseModel):
     """
     Модель для 'умной разведки'. Разделяет найденных персонажей на
-    существующих (сопоставляя с предоставленным списком) и абсолютно новых.
+    существующих (по ID) и абсолютно новых (по именам).
+    **ИЗМЕНЕНО:** Работает с UUID.
     """
-    mentioned_existing_characters: List[str] = Field(
+    mentioned_existing_character_ids: List[UUID] = Field(
         default_factory=list,
-        description="Список канонических имен существующих персонажей, которые были упомянуты в тексте."
+        description="Список ID существующих персонажей, которые были упомянуты в тексте."
     )
     newly_discovered_names: List[str] = Field(
         default_factory=list,
         description="Список имен новых персонажей, которых не было в предоставленном списке."
     )
 
+
 class CharacterPatch(BaseModel):
     """
     Модель для 'патча'. Содержит ТОЛЬКО измененные или новые данные персонажей.
     """
-    name: str
+    id: Optional[UUID] = Field(None, description="ID существующего персонажа для обновления. Если null - создается новый.")
+    name: Optional[str] = Field(None, description="Каноническое имя. Обязательно для новых персонажей (когда id is null).")
     description: Optional[str] = None
     spoiler_free_description: Optional[str] = None
     aliases: Optional[List[str]] = None
     chapter_mentions: Optional[Dict[str, str]] = None
+
+    @model_validator(mode='before')
+    def check_name_for_new_character(cls, values):
+        """
+        Проверяет, что если создается новый персонаж (id отсутствует),
+        то поле 'name' обязательно должно быть предоставлено.
+        """
+        if values.get('id') is None and not values.get('name'):
+            raise ValueError("Поле 'name' является обязательным для новых персонажей (когда id не указан).")
+        return values
+
 
 class CharacterPatchList(BaseModel):
     """Контейнер для списка патчей от LLM."""
@@ -125,6 +140,7 @@ class Scenario(BaseModel):
 
 class Character(BaseModel):
     """Полная информация о персонаже, собранная со всей книги."""
+    id: UUID = Field(default_factory=uuid4, description="Уникальный, неизменяемый ID персонажа.")
     name: str = Field(description="Полное, основное имя персонажа.")
     description: str = Field(description="Детальное, полное описание персонажа, которое может содержать спойлеры.")
     spoiler_free_description: str = Field(description="Краткое описание персонажа без спойлеров.")
@@ -138,7 +154,7 @@ class CharacterArchive(BaseModel):
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        data_to_save = self.model_dump(exclude_defaults=True)
+        data_to_save = self.model_dump(mode='json')
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data_to_save['characters'], f, ensure_ascii=False, indent=2)
         print(f"✅ Архив персонажей сохранен в: {path}")
@@ -147,7 +163,9 @@ class CharacterArchive(BaseModel):
     def load(cls, path: Path) -> CharacterArchive:
         if not path.exists():
             return cls(characters=[])
-        return cls(characters=json.loads(path.read_text("utf-8")))
+        data = json.loads(path.read_text("utf-8"))
+        return cls(characters=data)
+
 
 class BookManifest(BaseModel):
     """Содержит метаданные и настройки для всей книги."""
