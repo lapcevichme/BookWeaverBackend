@@ -6,13 +6,12 @@ import json
 from typing import List, Dict, Optional
 
 from core.data_models import (
-    ChapterSummary,
     CharacterArchive,
     CharacterReconResult,
     CharacterPatchList,
     RawScenario,
     AmbientTransitionList,
-    EmotionMap
+    EmotionMap, RawChapterSummary
 )
 from core.project_context import ProjectContext
 from utils.prompt_utils import generate_human_schema
@@ -21,8 +20,9 @@ from utils.prompt_utils import generate_human_schema
 def format_summary_generation_prompt(context: ProjectContext) -> str:
     """
     Формирует промпт для генерации двух типов пересказа главы.
+    Fixme!!! Тут стоит фильтр, его надо бы убирать.
     """
-    schema_description = generate_human_schema(ChapterSummary)
+    schema_description = generate_human_schema(RawChapterSummary)
 
     return f"""
 ТЫ — ОПЫТНЫЙ ЛИТЕРАТУРНЫЙ РЕДАКТОР.
@@ -31,9 +31,10 @@ def format_summary_generation_prompt(context: ProjectContext) -> str:
 Прочитай "Текст главы" и создай для него ДВА типа пересказа: "тизер" и "конспект".
 Верни результат в виде JSON-объекта, который строго соответствует предоставленному формату.
 
-ОПИСАНИЕ ТИПОВ ПЕРЕСКАЗА:
-1.  `teaser`: Краткий (40-60 слов) интригующий абзац. БЕЗ СПОЙЛЕРОВ.
-2.  `synopsis`: Детальный (100-150 слов) конспект. СОДЕРЖИТ СПОЙЛЕРЫ.
+**!!! ВАЖНЫЕ ПРАВИЛА БЕЗОПАСНОСТИ !!!**
+**- Избегай прямого упоминания и детального описания сцен насилия, жестокости или сексуального контента.**
+**- Используй нейтральные и литературные формулировки. Вместо прямолинейных терминов (особенно связанных с сексуальностью) используй эвфемизмы или описывай намерения персонажей более обтекаемо.**
+**- Сосредоточься на сюжете, мотивации персонажей и развитии событий, а не на шокирующих деталях.**
 
 ФОРМАТ ОТВЕТА (JSON):
 Ты должен вернуть объект со следующими полями:
@@ -126,9 +127,9 @@ def format_character_patch_prompt(
 
 # --- ПРОМПТЫ ДЛЯ ГЕНЕРАЦИИ СЦЕНАРИЯ ---
 def format_scenario_generation_prompt(
-    context: ProjectContext,
-    character_archive: CharacterArchive,
-    chapter_summary: Optional[str] = None
+        context: ProjectContext,
+        character_archive: CharacterArchive,
+        chapter_summary: Optional[str] = None
 ) -> str:
     """
     Формирует промпт для генерации "сырого" сценария главы.
@@ -228,4 +229,3 @@ def format_emotion_analysis_prompt(
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):
 """
-

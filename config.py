@@ -26,8 +26,8 @@ EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_lib
 
 # --- 3. Настройки моделей и API ---
 # Имена моделей для LLM
-FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
-POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
+FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.5-flash")
+POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.5-flash")
 
 ANALYZER_LLM_TEMPERATURE = 0.5
 GENERATOR_LLM_TEMPERATURE = 0.5

@@ -32,8 +32,10 @@ class CharacterPatch(BaseModel):
     """
     Модель для 'патча'. Содержит ТОЛЬКО измененные или новые данные персонажей.
     """
-    id: Optional[UUID] = Field(None, description="ID существующего персонажа для обновления. Если null - создается новый.")
-    name: Optional[str] = Field(None, description="Каноническое имя. Обязательно для новых персонажей (когда id is null).")
+    id: Optional[UUID] = Field(None,
+                               description="ID существующего персонажа для обновления. Если null - создается новый.")
+    name: Optional[str] = Field(None,
+                                description="Каноническое имя. Обязательно для новых персонажей (когда id is null).")
     description: Optional[str] = None
     spoiler_free_description: Optional[str] = None
     aliases: Optional[List[str]] = None
@@ -61,18 +63,22 @@ class RawScenarioEntry(BaseModel):
     speaker: str
     text: str
 
+
 class RawScenario(BaseModel):
     """Контейнер для 'сырого' сценария от LLM."""
     scenario: List[RawScenarioEntry]
+
 
 class AmbientTransition(BaseModel):
     """Представляет одну точку смены эмбиента в тексте."""
     triggerSentence: str = Field(description="Полная и точная цитата предложения, вызвавшего смену эмбиента.")
     ambientSoundId: str = Field(description="ID нового звука из библиотеки эмбиента.")
 
+
 class AmbientTransitionList(BaseModel):
     """Контейнер для списка смен эмбиента."""
     transitions: List[AmbientTransition]
+
 
 class EmotionMap(BaseModel):
     """Результат анализа эмоций."""
@@ -80,6 +86,12 @@ class EmotionMap(BaseModel):
 
 
 # --- 2. Финальные модели (основные сущности) ---
+class RawChapterSummary(BaseModel):
+    """'Сырой' пересказ главы, как его возвращает LLM."""
+    teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
+    synopsis: str = Field(
+        description="Детальный (100-150 слов) конспект для внутреннего использования. СОДЕРЖИТ спойлеры.")
+
 
 class ChapterSummary(BaseModel):
     """
@@ -87,7 +99,9 @@ class ChapterSummary(BaseModel):
     """
     chapter_id: str = Field(description="Уникальный идентификатор главы, например 'vol_1_chap_1'.")
     teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
-    synopsis: str = Field(description="Детальный (100-150 слов) конспект для внутреннего использования и для пользователя, чтобы освежить память. СОДЕРЖИТ все ключевые события и спойлеры.")
+    synopsis: str = Field(
+        description="Детальный (100-150 слов) конспект для внутреннего использования и для пользователя, чтобы освежить память. СОДЕРЖИТ все ключевые события и спойлеры.")
+
 
 class ChapterSummaryArchive(BaseModel):
     """Контейнер для хранения архива всех пересказов по главам."""
@@ -120,6 +134,7 @@ class ScenarioEntry(BaseModel):
     ambient: str = "none"
     audio_file: Optional[str] = None
 
+
 class Scenario(BaseModel):
     """Полный сценарий для одной главы."""
     entries: List[ScenarioEntry]
@@ -146,6 +161,7 @@ class Character(BaseModel):
     spoiler_free_description: str = Field(description="Краткое описание персонажа без спойлеров.")
     aliases: List[str] = Field(default_factory=list, description="Список альтернативных имен или прозвищ.")
     chapter_mentions: Dict[str, str] = Field(default_factory=dict, description="Сводка действий персонажа по главам.")
+
 
 class CharacterArchive(BaseModel):
     """Контейнер для хранения полного списка (архива) персонажей."""

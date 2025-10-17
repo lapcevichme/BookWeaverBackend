@@ -6,7 +6,7 @@ import logging
 from typing import Optional, Callable
 
 from core.project_context import ProjectContext
-from core.data_models import ChapterSummary
+from core.data_models import ChapterSummary, RawChapterSummary
 from pipelines import prompts
 from services.model_manager import ModelManager
 from utils import file_utils
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 class SummaryGenerationPipeline:
-    def __init__(self, model_manager: ModelManager): # <--- ИЗМЕНЕНИЕ
+    def __init__(self, model_manager: ModelManager):  # <--- ИЗМЕНЕНИЕ
         self.model_manager = model_manager
         logger.info("✅ Пайплайн SummaryGenerationPipeline инициализирован.")
 
@@ -24,6 +24,7 @@ class SummaryGenerationPipeline:
         """
         Запускает процесс генерации пересказов для всех глав книги.
         """
+
         def update_progress(progress: float, stage: str, message: str):
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
             if progress_callback:
@@ -70,15 +71,23 @@ class SummaryGenerationPipeline:
                     update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: генерация пересказа...")
                     chapter_context = ProjectContext(context.book_name, vol_num, chap_num)
                     prompt = prompts.format_summary_generation_prompt(chapter_context)
-                    summary_result = llm_service.call_for_pydantic(ChapterSummary, prompt)
 
-                    if summary_result:
-                        summary_archive.summaries[chapter_id] = summary_result
+                    raw_summary_result = llm_service.call_for_pydantic(RawChapterSummary, prompt)
+
+                    if raw_summary_result:
+                        final_summary = ChapterSummary(
+                            chapter_id=chapter_id,
+                            teaser=raw_summary_result.teaser,
+                            synopsis=raw_summary_result.synopsis
+                        )
+
+                        summary_archive.summaries[chapter_id] = final_summary
                         summary_archive.save(summary_archive_path)
                         logger.info(f"Пересказ для главы {chapter_id} успешно сгенерирован и сохранен.")
                         processed_count += 1
                     else:
-                        update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: не удалось сгенерировать пересказ.")
+                        update_progress(progress, stage,
+                                        f"Глава {i + 1}/{total_chapters}: не удалось сгенерировать пересказ.")
                         logger.warning(f"Не удалось сгенерировать пересказ для главы {chapter_id}.")
 
                 except FileNotFoundError:
