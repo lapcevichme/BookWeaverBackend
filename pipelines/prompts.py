@@ -11,25 +11,37 @@ from core.data_models import (
     CharacterPatchList,
     RawScenario,
     AmbientTransitionList,
-    EmotionMap, RawChapterSummary
+    EmotionMap, RawChapterSummary, ChapterSummary
 )
 from core.project_context import ProjectContext
 from utils.prompt_utils import generate_human_schema
 
 
-def format_summary_generation_prompt(context: ProjectContext) -> str:
+def format_summary_generation_prompt(
+        context: ProjectContext,
+        previous_summaries: list[ChapterSummary]
+) -> str:
     """
-    Формирует промпт для генерации двух типов пересказа главы.
+    Формирует промпт для генерации пересказа главы,
+    учитывая контекст предыдущих глав.
     Fixme!!! Тут стоит фильтр, его надо бы убирать.
     """
     schema_description = generate_human_schema(RawChapterSummary)
 
+    previous_context_str = ""
+    if previous_summaries:
+        context_lines = ["КОНТЕКСТ ПРЕДЫДУЩИХ ГЛАВ (ДЛЯ СПРАВКИ):"]
+        for summary in previous_summaries:
+            context_lines.append(f"Глава {summary.chapter_id}:\n{summary.synopsis}\n")
+        previous_context_str = "\n".join(context_lines)
     return f"""
 ТЫ — ОПЫТНЫЙ ЛИТЕРАТУРНЫЙ РЕДАКТОР.
 
 ТВОЯ ЗАДАЧА:
 Прочитай "Текст главы" и создай для него ДВА типа пересказа: "тизер" и "конспект".
-Верни результат в виде JSON-объекта, который строго соответствует предоставленному формату.
+**Крайне важно: УЧИТЫВАЙ КОНТЕКСТ ПРЕДЫДУЩИХ ГЛАВ, если он предоставлен.** Это поможет тебе понять общую сюжетную линию и правильно расставить акценты.
+
+{previous_context_str}
 
 **!!! ВАЖНЫЕ ПРАВИЛА БЕЗОПАСНОСТИ !!!**
 **- Избегай прямого упоминания и детального описания сцен насилия, жестокости или сексуального контента.**

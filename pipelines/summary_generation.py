@@ -9,14 +9,12 @@ from core.project_context import ProjectContext
 from core.data_models import ChapterSummary, RawChapterSummary
 from pipelines import prompts
 from services.model_manager import ModelManager
-from utils import file_utils
 
-# Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
 
 
 class SummaryGenerationPipeline:
-    def __init__(self, model_manager: ModelManager):  # <--- ИЗМЕНЕНИЕ
+    def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
         logger.info("✅ Пайплайн SummaryGenerationPipeline инициализирован.")
 
@@ -38,43 +36,52 @@ class SummaryGenerationPipeline:
             summary_archive_path = context.get_summary_archive_path()
             update_progress(0.05, stage, f"Загружен архив. Существующих пересказов: {len(summary_archive.summaries)}")
 
-            all_chapters = file_utils.get_all_chapters(context.book_dir)
-            if not all_chapters:
+            # Используем get_ordered_chapters для гарантии правильного порядка обработки
+            ordered_chapters = context.get_ordered_chapters()
+            if not ordered_chapters:
                 update_progress(1.0, "Завершено", "В папке проекта не найдено глав для анализа.")
                 return
 
-            total_chapters = len(all_chapters)
+            total_chapters = len(ordered_chapters)
             update_progress(0.1, stage, f"Найдено {total_chapters} глав для обработки.")
             processed_count = 0
             stage = "Обработка глав"
 
-            llm_service = self.model_manager.get_llm_service('character_analyzer')
+            # TODO: вынести константу
+            CONTEXT_WINDOW_SIZE = 3
 
-            for i, (vol_path, chap_path) in enumerate(all_chapters):
+            llm_service = self.model_manager.get_llm_service('summary_generator')
+
+            for i, (vol_num, chap_num) in enumerate(ordered_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
-
-                vol_name = vol_path.name
-                chap_name = chap_path.stem
-                vol_num = int(vol_name.split('_')[-1])
-                chap_num = int(chap_name.split('_')[-1])
                 chapter_id = f"vol_{vol_num}_chap_{chap_num}"
 
-                # Сообщение о текущей главе выводим через логгер, а не на фронт, чтобы не спамить
-                logger.info(f"Обработка главы [{i + 1}/{total_chapters}]: {chap_path.name}")
+                logger.info(f"Обработка главы [{i + 1}/{total_chapters}]: {chapter_id}")
 
                 if chapter_id in summary_archive.summaries:
-                    # Это тоже логируем, пользователю это видеть не обязательно
                     logger.info(f"Пересказ для главы {chapter_id} уже существует. Пропуск.")
                     continue
+
+                # Сбор контекста из предыдущих глав
+                previous_summaries: list[ChapterSummary] = []
+                start_index = max(0, i - CONTEXT_WINDOW_SIZE)
+                previous_chapter_ids_to_check = [
+                    f"vol_{v}_chap_{c}" for v, c in ordered_chapters[start_index:i]
+                ]
+
+                for prev_id in previous_chapter_ids_to_check:
+                    if prev_id in summary_archive.summaries:
+                        previous_summaries.append(summary_archive.summaries[prev_id])
 
                 try:
                     update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: генерация пересказа...")
                     chapter_context = ProjectContext(context.book_name, vol_num, chap_num)
-                    prompt = prompts.format_summary_generation_prompt(chapter_context)
 
+                    prompt = prompts.format_summary_generation_prompt(chapter_context, previous_summaries)
                     raw_summary_result = llm_service.call_for_pydantic(RawChapterSummary, prompt)
 
                     if raw_summary_result:
+                        # Создаем финальный объект, комбинируя ID из кода и результат от LLM
                         final_summary = ChapterSummary(
                             chapter_id=chapter_id,
                             teaser=raw_summary_result.teaser,
@@ -91,6 +98,7 @@ class SummaryGenerationPipeline:
                         logger.warning(f"Не удалось сгенерировать пересказ для главы {chapter_id}.")
 
                 except FileNotFoundError:
+                    chap_path = context.get_chapter_text_path(vol_num, chap_num)
                     error_msg = f"Файл главы не найден: {chap_path}"
                     update_progress(progress, "Ошибка", error_msg)
                     logger.error(error_msg)

@@ -104,7 +104,7 @@ class BookExporter:
             # 3Находим все главы и собираем информацию о них
             logging.info("--- Этап 3: Обработка глав ---")
             chapter_contexts = []
-            for vol_num, chap_num in self.context.discover_chapters():
+            for vol_num, chap_num in self.context.get_ordered_chapters():
                 chapter_context = ProjectContext(self.book_name, vol_num, chap_num)
                 # Обрабатываем только те главы, где есть готовый сценарий
                 if chapter_context.scenario_file.exists():

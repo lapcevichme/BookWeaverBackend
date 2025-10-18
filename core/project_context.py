@@ -8,6 +8,8 @@ from typing import Tuple, List
 import re
 import config
 from core.data_models import Scenario, CharacterArchive, ChapterSummaryArchive, BookManifest
+# ИЗМЕНЕНИЕ: Импортируем централизованные функции
+from utils import file_utils
 
 
 class ProjectContext:
@@ -50,16 +52,10 @@ class ProjectContext:
             self.ambient_cache_file = self.chapter_output_dir / "cache_ambient.json"
             self.emotion_cache_file = self.chapter_output_dir / "cache_emotion.json"
 
-    @staticmethod
-    def get_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]:
-        """Извлекает номер тома и главы из пути к файлу главы."""
-        vol_match = re.search(r"vol_(\d+)", str(chap_path))
-        chap_match = re.search(r"chapter_(\d+)", str(chap_path.name))
-
-        if not vol_match or not chap_match:
-            raise ValueError(f"Не удалось извлечь номер тома/главы из пути: {chap_path}")
-
-        return int(vol_match.group(1)), int(chap_match.group(1))
+    # ИЗМЕНЕНИЕ: Этот метод был дублированием логики и удален.
+    # Теперь мы будем использовать file_utils.parse_vol_chap_from_path
+    # @staticmethod
+    # def get_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]: ...
 
     def check_chapter_status(self) -> dict:
         """
@@ -143,27 +139,22 @@ class ProjectContext:
             raise AttributeError("Контекст не инициализирован для конкретной главы (отсутствует subtitles_file).")
         return self.subtitles_file
 
-    def discover_chapters(self) -> List[Tuple[int, int]]:
+    def get_ordered_chapters(self) -> List[Tuple[int, int]]:
         """
-        Сканирует директорию книги и находит все существующие главы.
+        Сканирует директорию книги, используя централизованную,
+        правильно отсортированную логику из file_utils.
         Возвращает список кортежей (номер_тома, номер_главы).
         """
-        chapters = []
-        if not self.book_dir.is_dir():
-            return chapters
+        # Получаем ПРАВИЛЬНО отсортированный список путей
+        chapter_paths = file_utils.get_all_chapters(self.book_dir)
 
-        for vol_dir in sorted(self.book_dir.glob("vol_*")):
-            if not vol_dir.is_dir():
-                continue
-            vol_match = re.match(r"vol_(\d+)", vol_dir.name)
-            if not vol_match:
-                continue
-            vol_num = int(vol_match.group(1))
+        # Преобразуем пути в кортежи (том, глава) с помощью централизованной функции
+        chapters = [file_utils.parse_vol_chap_from_path(p) for p in chapter_paths]
 
-            for chap_file in sorted(vol_dir.glob("chapter_*.txt")):
-                chap_match = re.match(r"chapter_(\d+)\.txt", chap_file.name)
-                if not chap_match:
-                    continue
-                chap_num = int(chap_match.group(1))
-                chapters.append((vol_num, chap_num))
         return chapters
+
+    def get_chapter_text_path(self, volume_num: int, chapter_num: int) -> Path:
+        """
+        Конструирует и возвращает путь к текстовому файлу главы.
+        """
+        return self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.txt"

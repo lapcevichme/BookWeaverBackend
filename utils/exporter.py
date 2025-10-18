@@ -89,7 +89,7 @@ class BookExporter:
             self._copy_artifact(self.context.book_dir, dest_sub_dir="book_source")
 
             chapter_contexts = []
-            for vol_num, chap_num in self.context.discover_chapters():
+            for vol_num, chap_num in self.context.get_ordered_chapters():
                 chapter_context = ProjectContext(self.book_name, vol_num, chap_num)
                 if chapter_context.scenario_file.exists():
                     chapter_contexts.append(chapter_context)

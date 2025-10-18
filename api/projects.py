@@ -67,7 +67,7 @@ async def export_project(book_name: str):
     if not context.book_dir.exists() or not context.book_dir.is_dir():
         raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
 
-    discovered_chapters = context.discover_chapters()
+    discovered_chapters = context.get_ordered_chapters()
     chapters_with_tts = 0
     if discovered_chapters:
         for vol_num, chap_num in discovered_chapters:
@@ -120,7 +120,7 @@ async def get_project_details(book_name: str):
 
     chapters_status = []
 
-    discovered_chapters = context.discover_chapters()
+    discovered_chapters = context.get_ordered_chapters()
 
     for vol_num, chap_num in discovered_chapters:
         chapter_context = ProjectContext(book_name, vol_num, chap_num)
@@ -228,7 +228,7 @@ async def get_project_status(book_name: str):
 
     status = BookStatusResponse(book_name=book_name)
 
-    discovered_chapters = context.discover_chapters()
+    discovered_chapters = context.get_ordered_chapters()
     status.total_chapters = len(discovered_chapters)
 
     if status.total_chapters == 0:

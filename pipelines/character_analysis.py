@@ -50,10 +50,12 @@ class CharacterAnalysisPipeline:
 
             total_chapters = len(all_chapters)
             stage = "Анализ глав"
-            for i, (vol_path, chap_path) in enumerate(all_chapters):
+            for i, chap_path in enumerate(all_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
-                vol_num, chap_num = context.get_vol_chap_from_path(chap_path)
+
+                vol_num, chap_num = file_utils.parse_vol_chap_from_path(chap_path)
                 chapter_id = f"vol_{vol_num}_chap_{chap_num}"
+
                 logger.info(f"--- Обработка главы [{i + 1}/{total_chapters}]: {chap_path.name} ---")
 
                 if self._is_chapter_processed(master_archive, chapter_id):
