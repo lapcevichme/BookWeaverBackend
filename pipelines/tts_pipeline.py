@@ -36,7 +36,6 @@ class TTSPipeline:
         update_progress(0.0, "Подготовка", f"Запуск синтеза речи для главы {context.chapter_id}")
 
         try:
-            # --- Шаг 1: Загрузка всех необходимых данных ---
             stage = "Загрузка данных"
             update_progress(0.02, stage, "Загрузка сервиса TTS...")
             tts_service = self.model_manager.get_tts_service()
@@ -59,7 +58,6 @@ class TTSPipeline:
 
             update_progress(0.1, stage, "Все данные успешно загружены.")
 
-            # --- Шаг 2: Синтез аудио и создание субтитров ---
             audio_output_dir = context.get_audio_output_dir()
             subtitle_path = context.get_subtitles_file()
             context.ensure_dirs()
@@ -78,7 +76,6 @@ class TTSPipeline:
                 audio_filename = f"{entry.id}.wav"
                 audio_path = audio_output_dir / audio_filename
 
-                stage = "Синтез речи"
                 character_name = entry.speaker
                 voice_id = None
 
@@ -87,6 +84,7 @@ class TTSPipeline:
                 else:
                     character_uuid = char_name_to_id_map.get(character_name)
                     if character_uuid:
+                        # ИСПРАВЛЕНИЕ: Убрано преобразование в str(). Ищем по объекту UUID.
                         voice_id = manifest.character_voices.get(character_uuid)
                         if not voice_id:
                             logger.warning(
@@ -99,8 +97,7 @@ class TTSPipeline:
                     voice_id = manifest.default_narrator_voice
 
                 if not voice_id:
-                    logger.error(
-                        f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика. Пропуск реплики {entry.id}.")
+                    logger.error(f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика. Пропуск реплики {entry.id}.")
                     continue
 
                 speaker_wav_path = context.get_voice_path(voice_id)
@@ -117,42 +114,35 @@ class TTSPipeline:
                 synthesis_result = None
                 audio_duration_ms = 0
 
-                # 1. Синтезируем, ТОЛЬКО если файла нет
+                stage = "Синтез речи"
                 if not audio_path.exists():
                     update_progress(progress, stage,
                                     f"Реплика {i + 1}/{total_entries}: Синтез (Спикер: {character_name})")
                     synthesis_result = tts_service.synthesize(processed_text, speaker_wav_path)
 
                     if synthesis_result:
-                        # 2. СРАЗУ получаем длительность из результата синтеза
                         audio_duration_ms = int(
                             (len(synthesis_result) / tts_service.tts_model.synthesizer.output_sample_rate) * 1000
                         )
-                        # 3. Сохраняем файл
                         sf.write(str(audio_path), np.array(synthesis_result),
                                  tts_service.tts_model.synthesizer.output_sample_rate)
                     else:
                         logger.error(f"Синтез речи (TTS) не удался для реплики {entry.id}.")
-                        continue  # Если синтез упал, пропускаем
+                        continue
                 else:
-                    # 4. Если файл уже был, читаем его для получения длительности
                     logger.info(f"Аудио для {audio_filename} уже существует, пропуск синтеза.")
                     try:
                         with sf.SoundFile(str(audio_path)) as f:
-                            audio_duration_ms = int((len(f.frames) / f.samplerate) * 1000)
+                            audio_duration_ms = int((f.frames / f.samplerate) * 1000)
                     except Exception as e:
                         logger.error(f"Не удалось прочитать существующий аудиофайл {audio_path}: {e}. Пропуск реплики.")
                         continue
 
-                # --- Получение длительности аудио (теперь файл точно существует) ---
-                try:
-                    with sf.SoundFile(str(audio_path)) as f:
-                        audio_duration_ms = int((len(f.frames) / f.samplerate) * 1000)
-                except Exception as e:
-                    logger.error(f"Не удалось прочитать аудиофайл {audio_path}: {e}. Пропуск реплики.")
+                if audio_duration_ms == 0:
+                    logger.warning(
+                        f"Длительность аудио для реплики {entry.id} равна нулю. Пропуск генерации субтитров для нее.")
                     continue
 
-                # --- Генерация таймкодов слов (выполняется всегда) ---
                 stage = "Создание субтитров"
                 update_progress(progress, stage, f"Реплика {i + 1}/{total_entries}: Генерация таймкодов...")
                 word_timings = tts_service.generate_word_timings(entry.text, audio_path)
@@ -163,7 +153,6 @@ class TTSPipeline:
                 subtitles_data.append(subtitle_entry)
                 total_duration_ms += audio_duration_ms
 
-                # Сохраняем субтитры после каждой реплики для отказоустойчивости
                 with open(subtitle_path, 'w', encoding='utf-8') as f:
                     json.dump(subtitles_data, f, ensure_ascii=False, indent=2)
 
@@ -194,3 +183,4 @@ class TTSPipeline:
             "duration_ms": duration_ms,
             "words": words_data
         }
+
