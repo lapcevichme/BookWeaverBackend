@@ -16,7 +16,6 @@ class CharacterReconResult(BaseModel):
     """
     Модель для 'умной разведки'. Разделяет найденных персонажей на
     существующих (по ID) и абсолютно новых (по именам).
-    **ИЗМЕНЕНО:** Работает с UUID.
     """
     mentioned_existing_character_ids: List[UUID] = Field(
         default_factory=list,
@@ -110,7 +109,6 @@ class ChapterSummaryArchive(BaseModel):
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        # Преобразуем в словарь для сохранения
         data_to_save = {key: summary.model_dump() for key, summary in self.summaries.items()}
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
@@ -121,7 +119,6 @@ class ChapterSummaryArchive(BaseModel):
         if not path.exists():
             return cls(summaries={})
         data = json.loads(path.read_text("utf-8"))
-        # Преобразуем из словаря обратно в объекты Pydantic
         summaries_obj = {key: ChapterSummary.model_validate(value) for key, value in data.items()}
         return cls(summaries=summaries_obj)
 
@@ -220,6 +217,7 @@ class BookManifest(BaseModel):
 
 # Эти модели созданы специально для того, чтобы показывать их LLM.
 # Они не содержат поля `id`, чтобы не путать модель.
+# TODO: нормально раскидать модели в этом файле
 
 class LlmRawScenarioEntry(BaseModel):
     """'Облегченная' версия RawScenarioEntry для показа LLM."""

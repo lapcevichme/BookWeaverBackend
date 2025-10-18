@@ -1,10 +1,11 @@
-import re
 import os
-from pathlib import Path
-import ebooklib
-from ebooklib import epub
-from bs4 import BeautifulSoup
+import re
 import shutil
+from pathlib import Path
+
+import ebooklib
+from bs4 import BeautifulSoup
+from ebooklib import epub
 
 
 class BookConverter:
@@ -158,4 +159,3 @@ if __name__ == '__main__':
 
     except Exception as e:
         print(f"Ошибка: {e}")
-

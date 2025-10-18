@@ -2,7 +2,9 @@
 Утилиты для генерации оптимизированных промптов.
 """
 from typing import Type, get_origin, get_args
+
 from pydantic import BaseModel
+
 
 def generate_human_schema(model: Type[BaseModel], indent: int = 0) -> str:
     """
@@ -22,10 +24,11 @@ def generate_human_schema(model: Type[BaseModel], indent: int = 0) -> str:
             # Для Generic типов вроде List[str] или Optional[str]
             # Optional[X] это Union[X, None]
             if str(origin_type).endswith("Union") and type(None) in type_args:
-                 inner_type_name = next(str(t).split('.')[-1].replace("'",'').replace('>','') for t in type_args if t is not type(None))
-                 type_name = f"опциональный {inner_type_name}"
+                inner_type_name = next(
+                    str(t).split('.')[-1].replace("'", '').replace('>', '') for t in type_args if t is not type(None))
+                type_name = f"опциональный {inner_type_name}"
             else:
-                inner_types = ", ".join(str(t).split('.')[-1].replace("'",'').replace('>','') for t in type_args)
+                inner_types = ", ".join(str(t).split('.')[-1].replace("'", '').replace('>', '') for t in type_args)
                 type_name = f"{origin_type.__name__}[{inner_types}]"
         else:
             type_name = field_type.__name__

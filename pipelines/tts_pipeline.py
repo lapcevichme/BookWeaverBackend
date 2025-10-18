@@ -97,7 +97,8 @@ class TTSPipeline:
                     voice_id = manifest.default_narrator_voice
 
                 if not voice_id:
-                    logger.error(f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика. Пропуск реплики {entry.id}.")
+                    logger.error(
+                        f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика. Пропуск реплики {entry.id}.")
                     continue
 
                 speaker_wav_path = context.get_voice_path(voice_id)
@@ -183,4 +184,3 @@ class TTSPipeline:
             "duration_ms": duration_ms,
             "words": words_data
         }
-

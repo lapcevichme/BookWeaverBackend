@@ -14,10 +14,12 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
 class VCService:
     """
     Сервис для Voice Conversion с ленивой загрузкой модели.
     """
+
     def __init__(self, model_name="voice_conversion_models/multilingual/vctk/freevc24"):
         self.model_name = model_name
         self._vc_model = None

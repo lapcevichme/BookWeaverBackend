@@ -5,10 +5,8 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Tuple, List
-import re
 import config
 from core.data_models import Scenario, CharacterArchive, ChapterSummaryArchive, BookManifest
-# ИЗМЕНЕНИЕ: Импортируем централизованные функции
 from utils import file_utils
 
 
@@ -50,12 +48,8 @@ class ProjectContext:
             # Пути к кэш-файлам для отказоустойчивости
             self.raw_scenario_cache_file = self.chapter_output_dir / "cache_raw_scenario.json"
             self.ambient_cache_file = self.chapter_output_dir / "cache_ambient.json"
-            self.emotion_cache_file = self.chapter_output_dir / "cache_emotion.json"
-
-    # ИЗМЕНЕНИЕ: Этот метод был дублированием логики и удален.
-    # Теперь мы будем использовать file_utils.parse_vol_chap_from_path
-    # @staticmethod
-    # def get_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]: ...
+            # TODO: и это кэшировать
+            # self.emotion_cache_file = self.chapter_output_dir / "cache_emotion.json"
 
     def check_chapter_status(self) -> dict:
         """

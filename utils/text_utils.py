@@ -1,6 +1,7 @@
-import re
 import json
+import re
 from pathlib import Path
+
 
 def cleanup_filename(name: str) -> str:
     """

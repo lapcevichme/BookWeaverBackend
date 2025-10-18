@@ -3,7 +3,6 @@ import logging
 from pathlib import Path
 from threading import Lock
 
-# Используем try-except для опциональных зависимостей
 try:
     from TTS.api import TTS
 except ImportError:

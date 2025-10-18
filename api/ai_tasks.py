@@ -12,7 +12,6 @@ router = APIRouter(
 @router.post("/analyze_characters", response_model=TaskStatusResponse, status_code=202)
 async def start_character_analysis(req: BookTaskRequest, runner: BackgroundTasks):
     """Запускает фоновую задачу для анализа персонажей во всей книге."""
-    # Обращаемся через state.
     return state.start_task(state.app_pipelines.character_pipeline.run, runner, book_name=req.book_name)
 
 

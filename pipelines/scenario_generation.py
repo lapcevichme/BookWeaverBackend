@@ -20,6 +20,7 @@ from services.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
+
 class ScenarioGenerationPipeline:
     """
     Класс-оркестратор, управляющий процессом генерации сценария для одной главы.
@@ -51,10 +52,10 @@ class ScenarioGenerationPipeline:
         """
         Запускает полный процесс генерации сценария для главы, указанной в контексте.
         """
+
         def update_progress(progress: float, stage: str, message: str):
             if progress_callback:
                 progress_callback(progress, stage, message)
-            # Логируем то же сообщение, что отправляем на фронтенд
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
 
         update_progress(0.0, "Начало", f"Запуск генерации сценария для главы {context.chapter_id}")
@@ -64,7 +65,6 @@ class ScenarioGenerationPipeline:
             # --- Шаг 0: Определение путей для кэша ---
             raw_scenario_path = context.raw_scenario_cache_file
             ambient_enriched_path = context.ambient_cache_file
-
 
             # --- Шаг 1: Загрузка исходных данных ---
             stage = "Загрузка данных"
@@ -264,4 +264,3 @@ class ScenarioGenerationPipeline:
                 entry['emotion'] = 'нейтрально'
 
         return entries
-

@@ -5,16 +5,15 @@
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
 import uvicorn
+from fastapi import FastAPI
 
 import config
+from api import state
+from api import tasks, projects, library, ai_tasks
+from api.models import ServerStateEnum
 from main import Application
 from utils.setup_logging import setup_logging
-
-from api import tasks, projects, library, ai_tasks
-from api import state
-from api.models import ServerStateEnum
 
 logger = logging.getLogger(__name__)
 

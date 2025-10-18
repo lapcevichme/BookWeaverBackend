@@ -185,7 +185,6 @@ async def upload_cover(book_name: str, file: UploadFile = File(...)):
     if file_ext not in allowed_extensions:
         raise HTTPException(status_code=415, detail="Поддерживаются только .jpg и .png файлы.")
 
-    # Сохраняем файл, используя путь из контекста
     try:
         with open(context.cover_file, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)

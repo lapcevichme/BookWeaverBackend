@@ -5,18 +5,16 @@
 а также предоставляет пользователю текстовый интерфейс (CLI)
 для запуска различных этапов обработки книги.
 """
+import logging
 import os
 import sys
-import logging
 
 from utils.setup_logging import setup_logging
 
-# Добавляем корневую директорию проекта в sys.path
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# --- ИЗМЕНЕНИЕ: Импортируем ModelManager и пайплайны ---
 from services.model_manager import ModelManager
 from pipelines.character_analysis import CharacterAnalysisPipeline
 from pipelines.scenario_generation import ScenarioGenerationPipeline
@@ -27,11 +25,13 @@ from core.project_context import ProjectContext
 
 logger = logging.getLogger(__name__)
 
+
 class Application:
     """
     Главный класс приложения, который теперь не создает сервисы,
     а получает готовый менеджер и передает его пайплайнам.
     """
+
     def __init__(self, model_manager: ModelManager):
         """
         Конструктор теперь принимает ModelManager.
@@ -51,7 +51,6 @@ class Application:
         self.tts_pipeline = TTSPipeline(self.model_manager)
         self.vc_pipeline = VCPipeline(self.model_manager)
         logger.info("✅ Все пайплайны успешно сконфигурированы.")
-
 
     # --- Методы для CLI-режима остаются для отладки ---
 
@@ -108,7 +107,7 @@ class Application:
             chapter_num = int(chapter_num_str)
 
             context = ProjectContext(book_name, volume_num, chapter_num)
-            context.get_chapter_text() # Проверка существования файла
+            context.get_chapter_text()  # Проверка существования файла
             return context
 
         except FileNotFoundError:
@@ -136,11 +135,16 @@ class Application:
 
             choice = input("Ваш выбор: ")
 
-            if choice == '1': self.run_character_analysis()
-            elif choice == '2': self.run_summary_generation()
-            elif choice == '3': self.run_scenario_generation()
-            elif choice == '4': self.run_tts_synthesis()
-            elif choice == '5': self.run_voice_conversion()
+            if choice == '1':
+                self.run_character_analysis()
+            elif choice == '2':
+                self.run_summary_generation()
+            elif choice == '3':
+                self.run_scenario_generation()
+            elif choice == '4':
+                self.run_tts_synthesis()
+            elif choice == '5':
+                self.run_voice_conversion()
             elif choice == '0':
                 print("Выход из программы.")
                 break
@@ -163,5 +167,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n❌ КРИТИЧЕСКАЯ ОШИБКА ПРИ ЗАПУСКЕ: {e}")
         import traceback
+
         traceback.print_exc()
         input("\nНажмите Enter для выхода...")

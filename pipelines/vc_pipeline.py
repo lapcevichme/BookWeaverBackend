@@ -4,7 +4,6 @@ from typing import Callable, Optional
 from core.project_context import ProjectContext
 from services.model_manager import ModelManager
 
-# Получаем логгер для этого модуля
 logger = logging.getLogger(__name__)
 
 
