@@ -16,13 +16,14 @@ input/
 output/
 export/
 was_in_root/
-
+/utils/mock_input/
 # 5. Игнорируем сгенерированные файлы в корне проекта
 *.wav
 *.zip
 *.srt
 *.env
 *.log
+output.txt
 # 6. Исключение: НЕ игнорируем нужные .wav файлы (исходники)
 #!input/voices/*.wav
 
