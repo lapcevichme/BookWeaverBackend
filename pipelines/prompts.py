@@ -137,7 +137,6 @@ def format_character_patch_prompt(
 
 
 # --- ПРОМПТЫ ДЛЯ ГЕНЕРАЦИИ СЦЕНАРИЯ ---
-# --- ПРОМПТЫ ДЛЯ ГЕНЕРАЦИИ СЦЕНАРИЯ ---
 def format_scenario_generation_prompt(
         context: ProjectContext,
         character_archive: CharacterArchive,
@@ -145,12 +144,16 @@ def format_scenario_generation_prompt(
 ) -> str:
     """
     Формирует промпт для генерации "сырого" сценария главы.
-    Версия 4.5 - Улучшена обработка монологов и стиля повествования.
+    Версия 4.6 - Добавлен контекст по персонажам в генератор сценария.
     """
     schema_description = generate_human_schema(LlmRawScenario)
     chapter_text = context.get_chapter_text()
-    char_aliases = {char.name: char.aliases for char in character_archive.characters}
-    char_aliases_json = json.dumps(char_aliases, ensure_ascii=False, indent=2)
+
+    character_profiles = [
+        f"- {char.name}: {char.spoiler_free_description}"
+        for char in character_archive.characters
+    ]
+    character_profiles_block = "\n".join(character_profiles)
 
     summary_block = ""
     if chapter_summary:
@@ -165,8 +168,8 @@ def format_scenario_generation_prompt(
 
 {summary_block}
 
-СПИСОК ПЕРСОНАЖЕЙ И ИХ ПСЕВДОНИМОВ (ДЛЯ СПРАВКИ):
-{char_aliases_json}
+КРАТКИЕ ОПИСАНИЯ ПЕРСОНАЖЕЙ, ДЕЙСТВУЮЩИХ В ГЛАВЕ:
+{character_profiles_block}
 
 ПРАВИЛА РАЗМЕТКИ СЦЕНАРИЯ:
 
@@ -188,8 +191,8 @@ def format_scenario_generation_prompt(
     -   Если внутри одного абзаца повествования происходит явное звуковое событие (стук в дверь, звон мечей, крик на фоне) или резкая смена обстановки, **ОБЯЗАТЕЛЬНО раздели этот абзац на два или более блока `narration`**.
     -   Событие должно оказаться в начале нового блока. Это КЛЮЧЕВОЙ момент для точной расстановки звуковых эффектов.
 
-5.  **Стилистический совет:**
-    -   Старайся объединять короткие, идущие подряд предложения Рассказчика в один логический блок `narration`, если они описывают одну сцену и между ними нет смены действия. Это делает повествование более плавным.
+5.  **Правило стиля повествования:**
+    -   Объединяй короткие, идущие подряд предложения Рассказчика в один логический блок `narration`, если они описывают одну сцену и между ними нет смены действия. Это делает повествование более плавным.
 
 ФОРМАТ ОТВЕТА (строго JSON, соответствующий этой структуре):
 {schema_description}

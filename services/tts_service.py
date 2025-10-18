@@ -84,7 +84,7 @@ class TTSService:
 
     def synthesize(self, text: str, speaker_wav_path: Path, language: str = "ru") -> list | None:
         """Синтезирует аудио из текста."""
-        model = self.tts_model  # Обращение к свойству инициирует загрузку
+        model = self.tts_model
         if not model: return None
         if not speaker_wav_path.exists():
             logger.error(f"Файл-образец голоса не найден: {speaker_wav_path}")
@@ -97,7 +97,7 @@ class TTSService:
 
     def generate_word_timings(self, text: str, audio_path: Path, language: str = "ru") -> list | None:
         """Генерирует таймкоды слов."""
-        model = self.whisper_model  # Обращение к свойству инициирует загрузку
+        model = self.whisper_model
         if not model: return None
         if not audio_path.exists():
             logger.error(f"Аудиофайл для выравнивания не найден: {audio_path}")

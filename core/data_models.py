@@ -128,6 +128,7 @@ class ChapterSummaryArchive(BaseModel):
 
 class ScenarioEntry(BaseModel):
     """Представляет одну запись (строку) в финальном сценарии."""
+    id: UUID
     type: Literal["dialogue", "narration"]
     text: str
     speaker: str
@@ -142,7 +143,7 @@ class Scenario(BaseModel):
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
-        data_to_save = [entry.model_dump(exclude_none=True) for entry in self.entries]
+        data_to_save = [entry.model_dump(mode='json', exclude_none=True) for entry in self.entries]
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data_to_save, f, ensure_ascii=False, indent=2)
         print(f"✅ Финальный сценарий успешно сохранен в: {path}")

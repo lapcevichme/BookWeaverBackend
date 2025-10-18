@@ -9,7 +9,7 @@ def setup_logging():
     """
     # Получаем корневой логгер
     logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)  # Устанавливаем базовый уровень логирования
+    logger.setLevel(logging.INFO)  # Устанавливаем базовый уровень логирования
 
     # Создаем форматтер
     log_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
