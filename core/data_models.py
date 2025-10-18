@@ -59,6 +59,7 @@ class CharacterPatchList(BaseModel):
 
 class RawScenarioEntry(BaseModel):
     """'Сырая' запись сценария, как ее возвращает LLM."""
+    id: UUID = Field(default_factory=uuid4)  # <-- ДОБАВЛЕНО
     type: Literal["dialogue", "narration"]
     speaker: str
     text: str
@@ -71,7 +72,7 @@ class RawScenario(BaseModel):
 
 class AmbientTransition(BaseModel):
     """Представляет одну точку смены эмбиента в тексте."""
-    triggerSentence: str = Field(description="Полная и точная цитата предложения, вызвавшего смену эмбиента.")
+    entry_id: UUID = Field(description="ID записи из сценария, с которой начинается новый эмбиент.")  # <-- ЗАМЕНЕНО
     ambientSoundId: str = Field(description="ID нового звука из библиотеки эмбиента.")
 
 
@@ -82,7 +83,7 @@ class AmbientTransitionList(BaseModel):
 
 class EmotionMap(BaseModel):
     """Результат анализа эмоций."""
-    emotions: Dict[str, str]
+    emotions: Dict[UUID, str]
 
 
 # --- 2. Финальные модели (основные сущности) ---
@@ -185,9 +186,9 @@ class CharacterArchive(BaseModel):
 class BookManifest(BaseModel):
     """Содержит метаданные и настройки для всей книги."""
     book_name: str
-    character_voices: Dict[str, str] = Field(
+    character_voices: Dict[UUID, str] = Field(
         default_factory=dict,
-        description="Сопоставление: Имя персонажа -> ID голоса (имя папки в /input/voices)."
+        description="Сопоставление: ID персонажа -> ID голоса (имя папки в /input/voices)."
     )
     default_narrator_voice: str = Field(
         "narrator_default",
@@ -214,3 +215,17 @@ class BookManifest(BaseModel):
         except (json.JSONDecodeError, ValidationError) as e:
             print(f"🛑 ОШИБКА: Не удалось загрузить или провалидировать манифест: {path}. Ошибка: {e}")
             raise ValueError(f"Некорректный файл манифеста: {path}") from e
+
+
+# Эти модели созданы специально для того, чтобы показывать их LLM.
+# Они не содержат поля `id`, чтобы не путать модель.
+
+class LlmRawScenarioEntry(BaseModel):
+    """'Облегченная' версия RawScenarioEntry для показа LLM."""
+    type: Literal["dialogue", "narration"]
+    speaker: str
+    text: str
+
+class LlmRawScenario(BaseModel):
+    """'Облегченный' контейнер для показа LLM."""
+    scenario: List[LlmRawScenarioEntry]

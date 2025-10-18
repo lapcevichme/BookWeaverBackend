@@ -9,9 +9,8 @@ from core.data_models import (
     CharacterArchive,
     CharacterReconResult,
     CharacterPatchList,
-    RawScenario,
     AmbientTransitionList,
-    EmotionMap, RawChapterSummary, ChapterSummary
+    EmotionMap, RawChapterSummary, ChapterSummary, LlmRawScenario
 )
 from core.project_context import ProjectContext
 from utils.prompt_utils import generate_human_schema
@@ -138,6 +137,7 @@ def format_character_patch_prompt(
 
 
 # --- ПРОМПТЫ ДЛЯ ГЕНЕРАЦИИ СЦЕНАРИЯ ---
+# --- ПРОМПТЫ ДЛЯ ГЕНЕРАЦИИ СЦЕНАРИЯ ---
 def format_scenario_generation_prompt(
         context: ProjectContext,
         character_archive: CharacterArchive,
@@ -145,8 +145,9 @@ def format_scenario_generation_prompt(
 ) -> str:
     """
     Формирует промпт для генерации "сырого" сценария главы.
+    Версия 4.5 - Улучшена обработка монологов и стиля повествования.
     """
-    schema_description = generate_human_schema(RawScenario)
+    schema_description = generate_human_schema(LlmRawScenario)
     chapter_text = context.get_chapter_text()
     char_aliases = {char.name: char.aliases for char in character_archive.characters}
     char_aliases_json = json.dumps(char_aliases, ensure_ascii=False, indent=2)
@@ -159,26 +160,38 @@ def format_scenario_generation_prompt(
 """
 
     return f"""
-ТЫ — ИИ-РЕЖИССЕР, который превращает текст книги в сценарий для аудиоспектакля.
-
-ТВОЯ ЗАДАЧА:
-Прочитай "Текст главы" и преобразуй его в последовательность JSON-объектов, строго следуя "Правилам разметки" и формату ответа.
+ТЫ — ИИ-РЕЖИССЕР, который превращает текст книги в детализированный сценарий для аудиоспектакля.
+Твоя задача — прочитать текст главы и скрупулезно преобразовать его в последовательность JSON-объектов, строго следуя правилам.
 
 {summary_block}
 
-СПИСОК ПЕРСОНАЖЕЙ И ИХ ПСЕВДОНИМОВ:
+СПИСОК ПЕРСОНАЖЕЙ И ИХ ПСЕВДОНИМОВ (ДЛЯ СПРАВКИ):
 {char_aliases_json}
 
-ПРАВИЛА РАЗМЕТКИ:
-1.  **Типы записей**:
+ПРАВИЛА РАЗМЕТКИ СЦЕНАРИЯ:
+
+1.  **Типы записей (`type`):**
     -   `narration`: Текст, который читает Рассказчик.
     -   `dialogue`: Прямая речь персонажа.
-2.  **Определение говорящего (`speaker`):**
-    -   Используй основное имя персонажа для реплик (`dialogue`).
-    -   Для `narration` `speaker` всегда "Рассказчик", кроме случаев внутреннего монолога.
-    -   НИКОГДА не используй "Неизвестен".
+    -   **ВНИМАНИЕ:** Внутренние монологи (мысли персонажа, часто в кавычках « ») размечай как `dialogue`, а не `narration`. Это критически важно для их последующей звуковой обработки.
 
-ФОРМАТ ОТВЕТА (JSON):
+2.  **Определение говорящего (`speaker`):**
+    -   Для `dialogue` (включая монологи) используй основное, каноническое имя персонажа.
+    -   Для `narration` `speaker` всегда должен быть "Рассказчик".
+    -   **Обработка неизвестных:** Если говорящего действительно невозможно определить по контексту (например, реплика из толпы), используй краткую и осмысленную роль (например, "Стражник", "Торговец", "Голос из толпы"). НИКОГДА не используй псевдонимы или общее слово "Неизвестен".
+
+3.  **Очистка текста (`text`):**
+    -   Текст реплик (`dialogue`) должен быть ПОЛНОСТЬЮ очищен от слов автора (например, "сказал он", "прошептала она", "подумал Джон").
+    -   Текст должен содержать только то, что произносится вслух или мыслится.
+
+4.  **Критически важное правило разделения (для звукорежиссера):**
+    -   Если внутри одного абзаца повествования происходит явное звуковое событие (стук в дверь, звон мечей, крик на фоне) или резкая смена обстановки, **ОБЯЗАТЕЛЬНО раздели этот абзац на два или более блока `narration`**.
+    -   Событие должно оказаться в начале нового блока. Это КЛЮЧЕВОЙ момент для точной расстановки звуковых эффектов.
+
+5.  **Стилистический совет:**
+    -   Старайся объединять короткие, идущие подряд предложения Рассказчика в один логический блок `narration`, если они описывают одну сцену и между ними нет смены действия. Это делает повествование более плавным.
+
+ФОРМАТ ОТВЕТА (строго JSON, соответствующий этой структуре):
 {schema_description}
 
 ТЕКСТ ГЛАВЫ:
@@ -189,16 +202,24 @@ def format_scenario_generation_prompt(
 
 
 def format_ambient_extraction_prompt(
-        context: ProjectContext, ambient_library: List[Dict]
+        raw_scenario_json: str, ambient_library: List[Dict]
 ) -> str:
-    """Формирует промпт для извлечения точек смены эмбиента."""
+    """
+    Формирует промпт для извлечения точек смены эмбиента.
+    Принимает готовый сценарий в JSON и работает с UUID.
+    """
     schema_description = generate_human_schema(AmbientTransitionList)
-    chapter_text = context.get_chapter_text()
     library_str = json.dumps(ambient_library, ensure_ascii=False, indent=2)
     return f"""
 ТЫ — ПРОДВИНУТЫЙ ЗВУКОРЕЖИССЕР.
-Твоя задача: найти в тексте моменты смены атмосферы и подобрать для них звук из библиотеки.
-Если атмосфера не меняется, верни ПУСТОЙ массив `transitions`.
+Твоя задача: изучить готовый сценарий и определить, с какой строки (entry) должна начаться смена атмосферы.
+
+ИНСТРУКЦИЯ:
+1. Прочитай СЦЕНАРИЙ. Каждая запись в нем имеет уникальный `id`.
+2. Проанализируй БИБЛИОТЕКУ ЭМБИЕНТА.
+3. Определи моменты, где меняется атмосфера.
+4. В ответе укажи `entry_id` той записи, с которой должен начаться новый звук.
+5. Если атмосфера в главе не меняется, верни ПУСТОЙ массив `transitions`.
 
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
@@ -206,8 +227,8 @@ def format_ambient_extraction_prompt(
 БИБЛИОТЕКА ЭМБИЕНТА:
 {library_str}
 
-ТЕКСТ ГЛАВЫ:
-{chapter_text}
+СЦЕНАРИЙ (ВХОДНЫЕ ДАННЫЕ):
+{raw_scenario_json}
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):
 """
@@ -218,6 +239,7 @@ def format_emotion_analysis_prompt(
 ) -> str:
     """
     Формирует промпт для пакетного анализа эмоций.
+    Работает с UUID в качестве `id` реплик.
     """
     schema_description = generate_human_schema(EmotionMap)
     character_profiles_json = json.dumps(character_profiles, ensure_ascii=False, indent=2)
@@ -225,7 +247,8 @@ def format_emotion_analysis_prompt(
     emotion_list_json = json.dumps(emotion_list, ensure_ascii=False)
     return f"""
 ТЫ — ГЛАВНЫЙ РЕЖИССЕР АУДИОТЕАТРА.
-Твоя задача: для КАЖДОЙ реплики из сценария ВЫБЕРИ ОДНУ эмоцию ИЗ СПИСКА. Учти описание персонажей и контекст.
+Твоя задача: для КАЖДОЙ реплики из сценария ВЫБЕРИ ОДНУ эмоцию ИЗ СПИСКА.
+В твоем ответе ключом в словаре `emotions` должен быть `id` реплики из входных данных.
 
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
@@ -236,7 +259,7 @@ def format_emotion_analysis_prompt(
 ОПИСАНИЯ ПЕРСОНАЖЕЙ:
 {character_profiles_json}
 
-СЦЕНАРИЙ РЕПЛИК:
+СЦЕНАРИЙ РЕПЛИК (ВХОДНЫЕ ДАННЫЕ):
 {replicas_scenario_json}
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):

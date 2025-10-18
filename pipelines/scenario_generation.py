@@ -25,7 +25,7 @@ class ScenarioGenerationPipeline:
     Класс-оркестратор, управляющий процессом генерации сценария для одной главы.
     """
 
-    def __init__(self, model_manager: ModelManager): # <--- ИЗМЕНЕНИЕ
+    def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
         self._load_libraries()
         logger.info("✅ Пайплайн ScenarioGenerationPipeline инициализирован.")
@@ -62,8 +62,9 @@ class ScenarioGenerationPipeline:
         try:
             context.ensure_dirs()
             # --- Шаг 0: Определение путей для кэша ---
-            raw_scenario_path = context.chapter_output_dir / "temp_raw_scenario.json"
-            ambient_enriched_path = context.chapter_output_dir / "temp_ambient_enriched.json"
+            raw_scenario_path = context.raw_scenario_cache_file
+            ambient_enriched_path = context.ambient_cache_file
+
 
             # --- Шаг 1: Загрузка исходных данных ---
             stage = "Загрузка данных"
@@ -89,7 +90,7 @@ class ScenarioGenerationPipeline:
                 raw_scenario_path.write_text(raw_scenario.model_dump_json(indent=2), encoding="utf-8")
                 update_progress(0.5, stage, f"Промежуточный результат сохранен в {raw_scenario_path.name}")
 
-            scenario_as_dicts = [entry.model_dump() for entry in raw_scenario.scenario]
+            scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
             # --- Шаг 3: Обогащение эмбиентом ---
             stage = "Анализ эмбиента"
@@ -98,7 +99,7 @@ class ScenarioGenerationPipeline:
                 ambient_enriched_scenario = json.loads(ambient_enriched_path.read_text("utf-8"))
             else:
                 update_progress(0.55, stage, "Отправка запроса к LLM для анализа эмбиента...")
-                ambient_enriched_scenario = self._enrich_with_ambient(context, scenario_as_dicts)
+                ambient_enriched_scenario = self._enrich_with_ambient(scenario_as_dicts)
                 ambient_enriched_path.write_text(json.dumps(ambient_enriched_scenario, indent=2, ensure_ascii=False),
                                                  encoding="utf-8")
                 update_progress(0.7, stage, f"Промежуточный результат сохранен в {ambient_enriched_path.name}")
@@ -172,12 +173,16 @@ class ScenarioGenerationPipeline:
         )
         return powerful_llm.call_for_pydantic(RawScenario, prompt)
 
-    def _enrich_with_ambient(self, context: ProjectContext, entries: List[Dict]) -> List[Dict]:
+    def _enrich_with_ambient(self, entries: List[Dict]) -> List[Dict]:
         """
         Определяет эмбиент для каждой записи сценария.
         """
         fast_llm = self.model_manager.get_llm_service('character_analyzer')
-        prompt = prompts.format_ambient_extraction_prompt(context, self.ambient_library)
+
+        # Теперь `entries` содержит UUID в виде строк, поэтому `json.dumps` сработает.
+        raw_scenario_json_str = json.dumps(entries, ensure_ascii=False, indent=2)
+        prompt = prompts.format_ambient_extraction_prompt(raw_scenario_json_str, self.ambient_library)
+
         ambient_data = fast_llm.call_for_pydantic(AmbientTransitionList, prompt)
 
         if not ambient_data or not ambient_data.transitions:
@@ -187,17 +192,17 @@ class ScenarioGenerationPipeline:
             return entries
 
         logger.info(f"Найдено {len(ambient_data.transitions)} точек смены эмбиента.")
+
+        transitions_map = {str(t.entry_id): t.ambientSoundId for t in ambient_data.transitions}
         current_ambient = "none"
-        transition_idx = 0
+
         for entry in entries:
+            entry_id = entry.get('id')
+            if entry_id in transitions_map:
+                current_ambient = transitions_map[entry_id]
+                logger.debug(f"Эмбиент изменен на '{current_ambient}' для entry_id: {entry_id}")
             entry['ambient'] = current_ambient
-            if transition_idx < len(ambient_data.transitions):
-                transition = ambient_data.transitions[transition_idx]
-                if entry['text'].strip().startswith(transition.triggerSentence.strip()):
-                    current_ambient = transition.ambientSoundId
-                    entry['ambient'] = current_ambient
-                    transition_idx += 1
-                    logger.debug(f"Эмбиент изменен на '{current_ambient}'")
+
         return entries
 
     def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str) -> List[Dict]:
@@ -215,9 +220,9 @@ class ScenarioGenerationPipeline:
             return entries
 
         replicas_to_analyze = []
-        for i, entry in enumerate(entries):
+        for entry in entries:
             if entry.get('speaker') and entry.get('speaker') != "Рассказчик":
-                replicas_to_analyze.append({"id": str(i), "speaker": entry['speaker'], "text": entry['text']})
+                replicas_to_analyze.append({"id": entry['id'], "speaker": entry['speaker'], "text": entry['text']})
 
         if not replicas_to_analyze:
             logger.info("В главе нет реплик персонажей для анализа эмоций.")
@@ -235,16 +240,28 @@ class ScenarioGenerationPipeline:
 
         if not emotion_map_data:
             logger.error("LLM не смогла проанализировать эмоции.")
+            # Установим эмоцию по умолчанию для диалогов, если анализ не удался
+            for entry in entries:
+                if entry.get('speaker') != "Рассказчик" and 'emotion' not in entry:
+                    entry['emotion'] = 'нейтрально'
             return entries
 
         logger.info(f"LLM успешно проанализировала {len(emotion_map_data.emotions)} реплик.")
-        for entry_id_str, emotion in emotion_map_data.emotions.items():
-            try:
-                entry_id = int(entry_id_str)
-                if entry_id < len(entries):
-                    entries[entry_id]['emotion'] = emotion
-            except (ValueError, IndexError):
-                logger.warning(f"LLM вернула некорректный ID реплики: '{entry_id_str}'. Пропускаю.")
-                continue
+
+        # Создаем словарь для быстрого поиска entry по id
+        entries_by_id = {entry['id']: entry for entry in entries}
+
+        for entry_id_uuid, emotion in emotion_map_data.emotions.items():
+            entry_id_str = str(entry_id_uuid)
+            if entry_id_str in entries_by_id:
+                entries_by_id[entry_id_str]['emotion'] = emotion
+            else:
+                logger.warning(f"LLM вернула ID реплики, которого нет в сценарии: '{entry_id_str}'. Пропускаю.")
+
+        # Убедимся, что у всех реплик персонажей есть эмоция (на случай, если LLM что-то пропустила)
+        for entry in entries:
+            if entry.get('speaker') != "Рассказчик" and 'emotion' not in entry:
+                entry['emotion'] = 'нейтрально'
+
         return entries
 
