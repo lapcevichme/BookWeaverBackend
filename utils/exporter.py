@@ -3,6 +3,9 @@ import shutil
 import logging
 from pathlib import Path
 from typing import Set, List
+# ИМПОРТИРУЕМ ОШИБКУ ВАЛИДАЦИИ
+from pydantic import ValidationError
+
 import config
 from core.project_context import ProjectContext
 
@@ -46,11 +49,17 @@ class BookExporter:
         """Анализирует все сценарии глав и возвращает ID использованных эмбиентов."""
         used_ambients = set()
         for chapter_context in chapter_contexts:
-            scenario = chapter_context.load_scenario()
-            if scenario:
-                for entry in scenario.entries:
-                    if entry.ambient and entry.ambient != "none":
-                        used_ambients.add(entry.ambient)
+            try:
+                scenario = chapter_context.load_scenario()
+                if scenario:
+                    for entry in scenario.entries:
+                        if entry.ambient and entry.ambient != "none":
+                            used_ambients.add(entry.ambient)
+            except ValidationError as e:
+                logging.error(f"🛑 Ошибка валидации файла сценария для главы '{chapter_context.chapter_id}'. "
+                              f"Возможно, он создан в старом формате (без ID). Глава будет пропущена. Ошибка: {e}")
+            except Exception as e:
+                logging.error(f"Не удалось обработать сценарий для главы '{chapter_context.chapter_id}': {e}")
         return used_ambients
 
     def _copy_ambients(self, ambient_ids: Set[str]):
@@ -82,26 +91,26 @@ class BookExporter:
         archive_created = False
 
         try:
-            # Этапы 1-4: Копирование артефактов, исходников, глав и эмбиентов
             self._copy_artifact(self.context.manifest_file)
             self._copy_artifact(self.context.character_archive_file)
             self._copy_artifact(self.context.summary_archive_file)
+            self._copy_artifact(self.context.cover_file)  # Добавлено копирование обложки
             self._copy_artifact(self.context.book_dir, dest_sub_dir="book_source")
 
             chapter_contexts = []
             for vol_num, chap_num in self.context.get_ordered_chapters():
                 chapter_context = ProjectContext(self.book_name, vol_num, chap_num)
-                if chapter_context.scenario_file.exists():
-                    chapter_contexts.append(chapter_context)
-                    chapter_dest_dir = chapter_context.chapter_id
-                    self._copy_artifact(chapter_context.scenario_file, dest_sub_dir=chapter_dest_dir)
-                    self._copy_artifact(chapter_context.subtitles_file, dest_sub_dir=chapter_dest_dir)
-                    self._copy_artifact(chapter_context.chapter_audio_dir, dest_sub_dir=chapter_dest_dir)
+                chapter_contexts.append(chapter_context)
+
+                # Копируем артефакты, если они существуют
+                chapter_dest_dir = chapter_context.chapter_id
+                self._copy_artifact(chapter_context.scenario_file, dest_sub_dir=chapter_dest_dir)
+                self._copy_artifact(chapter_context.subtitles_file, dest_sub_dir=chapter_dest_dir)
+                self._copy_artifact(chapter_context.chapter_audio_dir, dest_sub_dir=chapter_dest_dir)
 
             used_ambients = self._collect_used_ambients(chapter_contexts)
             self._copy_ambients(used_ambients)
 
-            # Этап 5: Создание ZIP-архива
             with zipfile.ZipFile(self.archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for file_path in self.temp_build_dir.rglob('*'):
                     arcname = file_path.relative_to(self.temp_build_dir)
@@ -112,6 +121,7 @@ class BookExporter:
 
         except Exception as e:
             logging.error(f"🛑 Ошибка во время экспорта: {e}", exc_info=True)
+            # В случае ошибки мы все равно возвращаем None, но теперь это будет реже
             return None
         finally:
             self._cleanup()
