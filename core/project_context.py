@@ -27,7 +27,7 @@ class ProjectContext:
         self.chapter_num = chapter_num
 
         # --- Базовые пути ---
-        self.book_dir = config.INPUT_DIR / "books" / self.book_name
+        self.book_dir = config.INPUT_DIR / config.BOOKS_DIR_NAME / self.book_name
         self.book_output_dir = config.OUTPUT_DIR / self.book_name
 
         # --- Пути к файлам-архивам уровня книги ---

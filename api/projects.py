@@ -35,8 +35,7 @@ async def import_project(file: UploadFile = File(...)):
         with open(temp_file_path, "wb") as buffer:
             buffer.write(contents)
 
-        books_dir = config.INPUT_DIR / "books"
-        converter = BookConverter(input_file=temp_file_path, books_root_dir=books_dir)
+        converter = BookConverter(input_file=temp_file_path)
         converter.convert()
         project_name = temp_file_path.stem
         return {"message": f"Проект '{project_name}' успешно импортирован."}

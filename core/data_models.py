@@ -58,7 +58,7 @@ class CharacterPatchList(BaseModel):
 
 class RawScenarioEntry(BaseModel):
     """'Сырая' запись сценария, как ее возвращает LLM."""
-    id: UUID = Field(default_factory=uuid4)  # <-- ДОБАВЛЕНО
+    id: UUID = Field(default_factory=uuid4)
     type: Literal["dialogue", "narration"]
     speaker: str
     text: str
@@ -71,7 +71,7 @@ class RawScenario(BaseModel):
 
 class AmbientTransition(BaseModel):
     """Представляет одну точку смены эмбиента в тексте."""
-    entry_id: UUID = Field(description="ID записи из сценария, с которой начинается новый эмбиент.")  # <-- ЗАМЕНЕНО
+    entry_id: UUID = Field(description="ID записи из сценария, с которой начинается новый эмбиент.")
     ambientSoundId: str = Field(description="ID нового звука из библиотеки эмбиента.")
 
 
@@ -184,6 +184,7 @@ class CharacterArchive(BaseModel):
 class BookManifest(BaseModel):
     """Содержит метаданные и настройки для всей книги."""
     book_name: str
+    author: Optional[str] = Field(None, description="Автор книги, извлеченный из метаданных.")
     character_voices: Dict[UUID, str] = Field(
         default_factory=dict,
         description="Сопоставление: ID персонажа -> ID голоса (имя папки в /input/voices)."
@@ -201,13 +202,15 @@ class BookManifest(BaseModel):
 
     @classmethod
     def load(cls, path: Path) -> BookManifest:
-        """Загружает манифест из файла, создавая его, если он не существует."""
+        """
+        Загружает манифест из файла.
+        Логика создания "по умолчанию" убрана.
+        Теперь манифест ДОЛЖЕН существовать (его создает BookConverter).
+        """
         if not path.exists():
-            print(f"⚠️ Манифест не найден по пути {path}. Будет создан новый.")
-            book_name = path.parent.name
-            manifest = cls(book_name=book_name)
-            manifest.save(path)
-            return manifest
+            print(f"🛑 КРИТИЧЕСКАЯ ОШИБКА: Манифест не найден по пути {path}.")
+            print("  -> Убедитесь, что книга была корректно проинициализирована (BookConverter).")
+            raise FileNotFoundError(f"Файл манифеста не найден: {path}")
         try:
             return cls.model_validate_json(path.read_text("utf-8"))
         except (json.JSONDecodeError, ValidationError) as e:
