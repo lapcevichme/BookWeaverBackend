@@ -38,7 +38,7 @@ GENERATOR_LLM_TEMPERATURE = 0.5
 SUMMARY_LLM_TEMPERATURE = 0.5
 
 # Настройки TTS (Синтеза речи)
-VC_MODEL_NAME = "ennis"
+VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 # --- Создание служебных директорий ---
