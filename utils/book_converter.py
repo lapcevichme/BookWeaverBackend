@@ -20,10 +20,6 @@ class BookConverter:
     """
 
     def __init__(self, input_file: Path):
-        """
-        ИЗМЕНЕНО: Конструктор теперь принимает ТОЛЬКО путь к исходному файлу.
-        Все пути назначения вычисляются на основе config.py.
-        """
         if not input_file.exists():
             raise FileNotFoundError(f"Исходный файл книги не найден: {input_file}")
 
@@ -46,7 +42,6 @@ class BookConverter:
             raise FileExistsError(f"Проект '{self.book_name}' уже существует (в input или output). "
                                   f"Удалите папки {self.project_input_dir} и {self.project_output_dir} и попробуйте снова.")
 
-        # Создаем обе директории
         self.project_input_dir.mkdir(parents=True)
         self.project_output_dir.mkdir(parents=True, exist_ok=True)
 

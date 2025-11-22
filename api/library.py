@@ -15,7 +15,7 @@ router = APIRouter(
     tags=["Asset Library"]
 )
 
-# --- Управление голосами ---
+# Управление голосами
 
 @router.get("/voices")
 async def get_voices_library():
@@ -70,7 +70,7 @@ async def delete_voice(voice_id: str):
     return JSONResponse(status_code=200, content={"message": f"Голос '{voice_id}' успешно удален."})
 
 
-# --- Управление фоновыми звуками (Ambient) ---
+# Управление эмбиентом
 
 def _read_ambient_library() -> List[Dict]:
     """Вспомогательная функция для чтения ambient_library.json."""

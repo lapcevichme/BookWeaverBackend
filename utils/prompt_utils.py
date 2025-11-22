@@ -21,8 +21,6 @@ def generate_human_schema(model: Type[BaseModel], indent: int = 0) -> str:
 
         # Определяем человекочитаемое имя типа
         if origin_type:
-            # Для Generic типов вроде List[str] или Optional[str]
-            # Optional[X] это Union[X, None]
             if str(origin_type).endswith("Union") and type(None) in type_args:
                 inner_type_name = next(
                     str(t).split('.')[-1].replace("'", '').replace('>', '') for t in type_args if t is not type(None))
@@ -40,9 +38,7 @@ def generate_human_schema(model: Type[BaseModel], indent: int = 0) -> str:
 
         lines.append(f"{prefix}- `{field_name}` {description}")
 
-        # Рекурсивно обрабатываем вложенные Pydantic-модели
         if type_args:
-            # Ищем Pydantic модели внутри List, Optional и т.д.
             for arg in type_args:
                 if isinstance(arg, type) and issubclass(arg, BaseModel):
                     lines.append(generate_human_schema(arg, indent=indent + 2))

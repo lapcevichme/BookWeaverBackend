@@ -101,7 +101,6 @@ class BookExporter:
         archive_created = False
 
         try:
-            # --- Сборка артефактов уровня книги ---
             logger.info("Сборка артефактов уровня книги...")
             self._copy_artifact(self.context.manifest_file)
             self._copy_artifact(self.context.character_archive_file)
@@ -110,7 +109,6 @@ class BookExporter:
 
             self._copy_artifact(self.context.book_dir, dest_sub_dir="book_source")
 
-            # --- Сборка артефактов уровня глав ---
             logger.info("Сборка артефактов по главам...")
             chapter_contexts = []
             for vol_num, chap_num in self.context.get_ordered_chapters():
@@ -122,12 +120,10 @@ class BookExporter:
                 self._copy_artifact(chapter_context.subtitles_file, dest_sub_dir=chapter_dest_dir)
                 self._copy_artifact(chapter_context.chapter_audio_dir, dest_sub_dir=chapter_dest_dir)
 
-            # --- Сборка зависимостей (эмбиент) ---
             logger.info("Сборка используемых эмбиент-файлов...")
             used_ambients = self._collect_used_ambients(chapter_contexts)
             self._copy_ambients(used_ambients)
 
-            # --- Архивация ---
             logger.info(f"Архивация временной папки в {self.archive_path.name}...")
             with zipfile.ZipFile(self.archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
                 for file_path in self.temp_build_dir.rglob('*'):

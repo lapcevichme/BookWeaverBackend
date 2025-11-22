@@ -1,6 +1,5 @@
 """
 Пайплайн для анализа персонажей по всему тексту книги.
-**ВЕРСИЯ 2.1 - Улучшенная логика применения патчей и валидация**
 """
 import json
 import logging
@@ -158,25 +157,24 @@ class CharacterAnalysisPipeline:
         char_map = {char.id: char for char in archive.characters}
         for patch in patch_list.patches:
             if patch.id and patch.id in char_map:
-                # --- ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕГО ---
+                # ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕГО
                 existing_char = char_map[patch.id]
                 # Создаем словарь с обновлениями, исключая None значения и 'id'
                 update_data = patch.model_dump(exclude_unset=True, exclude={'id'})
 
-                # Особая логика для объединения списков (aliases)
+                # Объединение aliases
                 if 'aliases' in update_data and update_data['aliases']:
                     existing_aliases = set(existing_char.aliases)
                     new_aliases = set(update_data['aliases'])
                     update_data['aliases'] = sorted(list(existing_aliases.union(new_aliases)))
 
-                # Особая логика для объединения словарей (chapter_mentions)
+                # Объединение chapter_mentions
                 if 'chapter_mentions' in update_data and update_data['chapter_mentions']:
                     # Мы не можем просто обновить, так как model_copy не делает глубокое слияние
                     # Поэтому обновляем вручную и удаляем из update_data
                     existing_char.chapter_mentions.update(update_data['chapter_mentions'])
                     del update_data['chapter_mentions']
 
-                # Применяем остальные обновления через model_copy
                 if update_data:
                     updated_char = existing_char.model_copy(update=update_data)
                     char_map[patch.id] = updated_char
@@ -185,7 +183,7 @@ class CharacterAnalysisPipeline:
 
 
             elif patch.id is None and patch.name:
-                # --- СОЗДАНИЕ НОВОГО ---
+                # СОЗДАНИЕ НОВОГО
                 new_char = Character(
                     name=patch.name,
                     description=patch.description or "Описание не предоставлено.",

@@ -11,7 +11,6 @@ def get_natural_sort_key(filename: str) -> list:
     # Разделяем строку на текстовые и числовые части.
     # Например, "vol_10" -> ['', '10', '']
     parts = re.split(r'(\d+)', filename)
-    # Преобразуем числовые части в int для корректного сравнения
     return [int(text) if text.isdigit() else text.lower() for text in parts]
 
 
@@ -20,9 +19,7 @@ def parse_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]:
     ЦЕНТРАЛИЗОВАННАЯ ФУНКЦИЯ: Извлекает номер тома и главы из пути к файлу.
     Пример пути: .../vol_1/chapter_10.txt -> (1, 10)
     """
-    # Ищем 'vol_ЧИСЛО' во всем пути
     vol_match = re.search(r"vol_(\d+)", str(chap_path.parent.name))
-    # Ищем 'chapter_ЧИСЛО' только в имени файла
     chap_match = re.search(r"chapter_(\d+)", str(chap_path.name))
 
     if not vol_match or not chap_match:
@@ -39,12 +36,7 @@ def get_all_chapters(book_path: Path) -> list[Path]:
     if not book_path.is_dir():
         return []
 
-    # Используем glob для поиска всех файлов глав сразу
-    # '**' означает поиск по всем поддиректориям
     all_chapter_paths = list(book_path.glob("vol_*/chapter_*.txt"))
-
-    # Сортируем полученный список с помощью нашего ключа натуральной сортировки
-    # Мы передаем полный путь, но ключ будет эффективно работать с именами папок/файлов
     all_chapter_paths.sort(key=lambda p: get_natural_sort_key(str(p)))
 
     return all_chapter_paths

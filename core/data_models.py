@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
-# --- 1. Промежуточные модели (ответы от LLM) ---
+# --- Промежуточные модели (ответы от LLM) ---
 
 class CharacterReconResult(BaseModel):
     """
@@ -85,7 +85,7 @@ class EmotionMap(BaseModel):
     emotions: Dict[UUID, str]
 
 
-# --- 2. Финальные модели (основные сущности) ---
+# --- Финальные модели (основные сущности) ---
 class RawChapterSummary(BaseModel):
     """'Сырой' пересказ главы, как его возвращает LLM."""
     teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")

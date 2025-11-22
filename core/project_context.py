@@ -17,11 +17,6 @@ class ProjectContext:
     """
 
     def __init__(self, book_name: str, volume_num: int | None = None, chapter_num: int | None = None):
-        """
-        volume_num и chapter_num теперь необязательные.
-        Это позволяет создавать контекст для всей книги (например, для анализа персонажей),
-        не указывая конкретную главу.
-        """
         self.book_name = book_name
         self.volume_num = volume_num
         self.chapter_num = chapter_num
@@ -141,8 +136,6 @@ class ProjectContext:
         """
         # Получаем ПРАВИЛЬНО отсортированный список путей
         chapter_paths = file_utils.get_all_chapters(self.book_dir)
-
-        # Преобразуем пути в кортежи (том, глава) с помощью централизованной функции
         chapters = [file_utils.parse_vol_chap_from_path(p) for p in chapter_paths]
 
         return chapters

@@ -36,7 +36,6 @@ class SummaryGenerationPipeline:
             summary_archive_path = context.get_summary_archive_path()
             update_progress(0.05, stage, f"Загружен архив. Существующих пересказов: {len(summary_archive.summaries)}")
 
-            # Используем get_ordered_chapters для гарантии правильного порядка обработки
             ordered_chapters = context.get_ordered_chapters()
             if not ordered_chapters:
                 update_progress(1.0, "Завершено", "В папке проекта не найдено глав для анализа.")

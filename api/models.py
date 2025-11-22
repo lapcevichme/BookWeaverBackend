@@ -1,7 +1,3 @@
-"""
-Этот файл содержит все Pydantic-модели, используемые в разных частях API.
-Это помогает избежать циклических импортов.
-"""
 from pydantic import BaseModel, Field
 from typing import List, Literal, Optional
 from enum import Enum

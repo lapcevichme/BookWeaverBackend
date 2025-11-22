@@ -1,5 +1,5 @@
 """
-Этот файл содержит "зависимости" (dependencies) FastAPI
+Этот файл содержит зависимости FastAPI
 для проверки аутентификации.
 """
 from fastapi import Depends, HTTPException, status

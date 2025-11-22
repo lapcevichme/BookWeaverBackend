@@ -20,7 +20,7 @@ router = APIRouter(
 )
 
 
-# --- Project Lifecycle ---
+# Project Lifecycle
 
 @router.post("/import")
 async def import_project(file: UploadFile = File(...)):
@@ -99,7 +99,7 @@ async def export_project(book_name: str):
         raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера при создании архива: {e}")
 
 
-# --- Project Details & Artifacts ---
+# Project Details & Artifacts
 
 @router.get("/")
 async def list_projects():
@@ -170,7 +170,7 @@ async def get_chapter_artifact(book_name: str, volume_num: int, chapter_num: int
     return FileResponse(artifact_path, media_type="application/json")
 
 
-# --- Mobile App / Streaming Endpoints ---
+# Mobile App / Streaming Endpoints
 
 @router.post("/{book_name}/cover")
 async def upload_cover(book_name: str, file: UploadFile = File(...)):

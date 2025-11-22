@@ -84,7 +84,6 @@ class TTSPipeline:
                 else:
                     character_uuid = char_name_to_id_map.get(character_name)
                     if character_uuid:
-                        # ИСПРАВЛЕНИЕ: Убрано преобразование в str(). Ищем по объекту UUID.
                         voice_id = manifest.character_voices.get(character_uuid)
                         if not voice_id:
                             logger.warning(
