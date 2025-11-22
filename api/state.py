@@ -5,6 +5,8 @@
 """
 import uuid
 import logging
+import secrets
+from pathlib import Path
 from typing import Dict, Any
 
 from fastapi import BackgroundTasks, HTTPException
@@ -16,14 +18,42 @@ from services.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
-# --- Глобальные переменные, управляющие состоянием сервера ---
+# Глобальные переменные, управляющие состоянием сервера
 SERVER_STATUS = ServerStatus(status=ServerStateEnum.INITIALIZING, message="Server is starting up...")
 model_manager = ModelManager()
 app_pipelines: Application | None = None
 background_tasks: Dict[str, Dict[str, Any]] = {}
 
+TOKEN_FILE = Path(".server_token")
 
-# --- Логика управления фоновыми задачами ---
+
+def get_or_create_server_token() -> str:
+    """
+    Читает токен из .server_token. Если файла нет - создает его.
+    Это сохраняет токен между перезапусками сервера.
+    """
+    if TOKEN_FILE.exists():
+        token = TOKEN_FILE.read_text("utf-8").strip()
+        if token:
+            logger.info(f"Загружен постоянный токен из {TOKEN_FILE.name}")
+            return token
+
+    # Если токен плохой или файла нет, генерируем новый
+    token = secrets.token_hex(32)
+    try:
+        TOKEN_FILE.write_text(token, "utf-8")
+        logger.info(f"Сгенерирован и сохранен новый токен в {TOKEN_FILE.name}")
+    except Exception as e:
+        logger.error(f"Не удалось сохранить токен в файл {TOKEN_FILE.name}: {e}")
+
+    return token
+
+
+# Генерируем один раз при запуске сервера
+SERVER_TOKEN = get_or_create_server_token()
+
+
+# Фоновые задачи
 
 def update_task_progress(task_id: str, progress: float, stage: str, message: str):
     """Обновляет статус задачи."""
@@ -31,6 +61,7 @@ def update_task_progress(task_id: str, progress: float, stage: str, message: str
         background_tasks[task_id]["progress"] = progress
         background_tasks[task_id]["stage"] = stage
         background_tasks[task_id]["message"] = message
+
 
 def run_task_wrapper(task_id: str, target_func, **kwargs):
     """Обертка для выполнения задачи в фоне с обработкой ошибок."""
@@ -52,7 +83,7 @@ def start_task(target_func, background_tasks_runner: BackgroundTasks, **kwargs):
     if SERVER_STATUS.status != ServerStateEnum.READY:
         raise HTTPException(status_code=503, detail=f"Server is not ready. Current state: {SERVER_STATUS.status}")
     if app_pipelines is None:
-         raise HTTPException(status_code=500, detail="AI Pipelines are not initialized due to a startup error.")
+        raise HTTPException(status_code=500, detail="AI Pipelines are not initialized due to a startup error.")
 
     task_id = str(uuid.uuid4())
     background_tasks[task_id] = {

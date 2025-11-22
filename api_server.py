@@ -11,6 +11,7 @@ from fastapi import FastAPI
 import config
 from api import state
 from api import tasks, projects, library, ai_tasks
+from api.mobile import mobile_api_router
 from api.models import ServerStateEnum
 from main import Application
 from utils.setup_logging import setup_logging
@@ -23,7 +24,6 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управляет инициализацией и завершением работы приложения."""
-    # Забываем про `global`, теперь мы мутируем атрибуты импортированного модуля `state`
     try:
         setup_logging()
         logger.info("=" * 50)
@@ -35,6 +35,12 @@ async def lifespan(app: FastAPI):
         config.VOICES_DIR.mkdir(exist_ok=True)
         config.AMBIENT_DIR.mkdir(exist_ok=True)
         (config.INPUT_DIR / "books").mkdir(exist_ok=True)
+
+        logger.info("=" * 50)
+        logger.info(f"🔑 ВАШ СЕКРЕТНЫЙ API ТОКЕН (Bearer Token):")
+        logger.info(state.SERVER_TOKEN)
+        logger.info("Используйте его в заголовке 'Authorization: Bearer <token>'")
+        logger.info("=" * 50)
 
         logger.info("Инициализация AI-пайплайнов...")
 
@@ -53,7 +59,7 @@ async def lifespan(app: FastAPI):
     logger.info("Сервер завершает работу.")
 
 
-# --- Создание и конфигурация FastAPI приложения ---
+# Создание и конфигурация FastAPI приложения
 
 app = FastAPI(
     title="BookWeaver AI Backend",
@@ -67,7 +73,9 @@ app.include_router(tasks.router)
 app.include_router(projects.router)
 app.include_router(library.router)
 app.include_router(ai_tasks.router)
-
+app.include_router(mobile_api_router.api_router)
+app.include_router(mobile_api_router.static_router)
+app.include_router(mobile_api_router.download_router)
 
 # --- Точка входа ---
 
@@ -81,4 +89,4 @@ if __name__ == "__main__":
     logger.info("🚀  ДЛЯ ЗАПУСКА СЕРВЕРА ВЫПОЛНИТЕ В ТЕРМИНАЛЕ:")
     logger.info("uvicorn api_server:app --reload")
     logger.info("=" * 50)
-    uvicorn.run("api_server:app", host="127.0.0.1", port=8000, reload=True)
+    uvicorn.run("api_server:app", host="0.0.0.0", port=config.SERVER_PORT, reload=True)

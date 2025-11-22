@@ -6,6 +6,8 @@ from dotenv import load_dotenv
 # Загружаем переменные окружения (например, GEMINI_API_KEY)
 load_dotenv()
 
+SERVER_PORT = 8080
+
 # --- 1. Базовые пути ---
 # Корень проекта, от которого будут строиться все остальные пути.
 BASE_DIR = Path(__file__).parent.resolve()
