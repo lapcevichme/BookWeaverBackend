@@ -1,7 +1,3 @@
-"""
-Главный файл для запуска FastAPI сервера.
-Инициализирует приложение, управляет жизненным циклом и подключает роутеры из папки /api.
-"""
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,15 +15,13 @@ from utils.setup_logging import setup_logging
 logger = logging.getLogger(__name__)
 
 
-# --- Жизненный цикл приложения (Lifespan) ---
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управляет инициализацией и завершением работы приложения."""
     try:
         setup_logging()
         logger.info("=" * 50)
-        logger.info("✨ BookWeaver AI Backend: Запуск...")
+        logger.info("BookWeaver Backend: Запуск...")
         logger.info("=" * 50)
 
         config.INPUT_DIR.mkdir(exist_ok=True)
@@ -37,9 +31,8 @@ async def lifespan(app: FastAPI):
         (config.INPUT_DIR / "books").mkdir(exist_ok=True)
 
         logger.info("=" * 50)
-        logger.info(f"🔑 ВАШ СЕКРЕТНЫЙ API ТОКЕН (Bearer Token):")
+        logger.info(f"🔑 Bearer Token:")
         logger.info(state.SERVER_TOKEN)
-        logger.info("Используйте его в заголовке 'Authorization: Bearer <token>'")
         logger.info("=" * 50)
 
         logger.info("Инициализация AI-пайплайнов...")
@@ -77,16 +70,11 @@ app.include_router(mobile_api_router.api_router)
 app.include_router(mobile_api_router.static_router)
 app.include_router(mobile_api_router.download_router)
 
-# --- Точка входа ---
 
 @app.get("/", include_in_schema=False)
 async def root():
-    return {"message": "BookWeaver AI Backend работает. Перейдите на /docs для просмотра API."}
+    return {"message": "BookWeaver Backend работает. Перейдите на /docs для просмотра API."}
 
 
 if __name__ == "__main__":
-    logger.info("=" * 50)
-    logger.info("🚀  ДЛЯ ЗАПУСКА СЕРВЕРА ВЫПОЛНИТЕ В ТЕРМИНАЛЕ:")
-    logger.info("uvicorn api_server:app --reload")
-    logger.info("=" * 50)
     uvicorn.run("api_server:app", host="0.0.0.0", port=config.SERVER_PORT, reload=True)

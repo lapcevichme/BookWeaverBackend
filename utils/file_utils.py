@@ -6,17 +6,15 @@ from typing import Tuple
 def get_natural_sort_key(filename: str) -> list:
     """
     Создает ключ для "естественной" сортировки строк с числами.
-    Это гарантирует, что 'item_10' идет после 'item_2', а не перед.
+    'item_10' идет после 'item_2', а не перед.
     """
-    # Разделяем строку на текстовые и числовые части.
-    # Например, "vol_10" -> ['', '10', '']
     parts = re.split(r'(\d+)', filename)
     return [int(text) if text.isdigit() else text.lower() for text in parts]
 
 
 def parse_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]:
     """
-    ЦЕНТРАЛИЗОВАННАЯ ФУНКЦИЯ: Извлекает номер тома и главы из пути к файлу.
+    Извлекает номер тома и главы из пути к файлу.
     Пример пути: .../vol_1/chapter_10.txt -> (1, 10)
     """
     vol_match = re.search(r"vol_(\d+)", str(chap_path.parent.name))
@@ -30,8 +28,8 @@ def parse_vol_chap_from_path(chap_path: Path) -> Tuple[int, int]:
 
 def get_all_chapters(book_path: Path) -> list[Path]:
     """
-    ЦЕНТРАЛИЗОВАННАЯ ФУНКЦИЯ: Находит все главы во всех томах
-    и возвращает ЕДИНЫЙ отсортированный список путей к файлам глав.
+    Находит все главы во всех томах
+    и возвращает единый отсортированный список путей к файлам глав.
     """
     if not book_path.is_dir():
         return []

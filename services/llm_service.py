@@ -88,7 +88,6 @@ class LLMService:
                 break
 
             except exceptions.ResourceExhausted as e:
-                # Используем регулярное выражение для поиска задержки в сообщении
                 match = re.search(r"Please retry in ([\d.]+)s", str(e))
                 if match:
                     delay = float(match.group(1)) + 1  # Добавляем 1 секунду на всякий случай
@@ -96,7 +95,6 @@ class LLMService:
                         f"Ошибка квоты API (429). API рекомендует подождать {delay:.2f} сек. Выполняю ожидание.")
                     time.sleep(delay)
                 else:
-                    # Если по какой-то причине не нашли, используем старую логику
                     wait_time = 2 ** (attempt + 1)
                     logger.warning(
                         f"Ошибка квоты API (429), но не удалось извлечь время ожидания. Повторная попытка через {wait_time} сек.")

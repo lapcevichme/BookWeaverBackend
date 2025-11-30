@@ -11,11 +11,6 @@ from utils import file_utils
 
 
 class ProjectContext:
-    """
-    Инкапсулирует все пути и данные, связанные с обработкой
-    одной конкретной главы или целой книги.
-    """
-
     def __init__(self, book_name: str, volume_num: int | None = None, chapter_num: int | None = None):
         self.book_name = book_name
         self.volume_num = volume_num

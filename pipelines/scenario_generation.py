@@ -25,7 +25,6 @@ class ScenarioGenerationPipeline:
     """
     Класс-оркестратор, управляющий процессом генерации сценария для одной главы.
     """
-
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
         self._load_libraries()
@@ -62,11 +61,11 @@ class ScenarioGenerationPipeline:
 
         try:
             context.ensure_dirs()
-            # Шаг 0: Определение путей для кэша
+            # 0: Определение путей для кэша
             raw_scenario_path = context.raw_scenario_cache_file
             ambient_enriched_path = context.ambient_cache_file
 
-            # Шаг 1: Загрузка исходных данных
+            # 1: Загрузка исходных данных
             stage = "Загрузка данных"
             update_progress(0.1, stage, "Загрузка архива персонажей...")
             character_archive = context.load_character_archive()
@@ -75,7 +74,7 @@ class ScenarioGenerationPipeline:
             update_progress(0.15, stage,
                             f"Архивы персонажей ({len(character_archive.characters)} шт.) и пересказов ({len(summary_archive.summaries)} шт.) успешно загружены.")
 
-            # Шаг 2: Генерация "сырого" сценария
+            # 2: Генерация "сырого" сценария
             stage = "Генерация сценария"
             if raw_scenario_path.exists():
                 update_progress(0.2, stage, "Обнаружен кэш 'сырого' сценария, используется он.")
@@ -92,7 +91,7 @@ class ScenarioGenerationPipeline:
 
             scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
-            # Шаг 3: Обогащение эмбиентом
+            # 3: Обогащение эмбиентом
             stage = "Анализ эмбиента"
             if ambient_enriched_path.exists():
                 update_progress(0.55, stage, "Обнаружен кэш данных по эмбиенту, используется он.")
@@ -104,14 +103,14 @@ class ScenarioGenerationPipeline:
                                                  encoding="utf-8")
                 update_progress(0.7, stage, f"Промежуточный результат сохранен в {ambient_enriched_path.name}")
 
-            # Шаг 4: Обогащение эмоциями
+            # 4: Обогащение эмоциями
             stage = "Анализ эмоций"
             update_progress(0.75, stage, "Отправка запроса к LLM для анализа эмоций...")
             emotion_enriched_scenario = self._enrich_with_emotions(ambient_enriched_scenario, character_archive,
                                                                    context.chapter_id)
             update_progress(0.85, stage, "Анализ эмоций завершен.")
 
-            # Шаг 5: Финальная обработка и сохранение
+            # 5: Финальная обработка и сохранение
             stage = "Финализация"
             update_progress(0.9, stage, "Сборка финального сценария...")
             final_entries = [ScenarioEntry(**entry_data) for entry_data in emotion_enriched_scenario]
@@ -119,7 +118,7 @@ class ScenarioGenerationPipeline:
             update_progress(0.95, stage, "Сохранение файла сценария на диск...")
             final_scenario.save(context.scenario_file)
 
-            # Шаг 6: Очистка временных файлов
+            # 6: Очистка временных файлов
             raw_scenario_path.unlink(missing_ok=True)
             ambient_enriched_path.unlink(missing_ok=True)
             update_progress(0.98, stage, "Временные файлы кэша удалены.")

@@ -1,33 +1,26 @@
-"""
-Этот файл содержит Pydantic-модели (DTOs), соответствующие обновленному ТЗ
-для оптимизации мобильного клиента (On-Demand Loading).
-"""
-
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
 
-
-# Общие / Служебные модели
+# Общие
 
 class OnboardingDataDto(BaseModel):
-    """Данные для QR-кода (знакомство)."""
+    """Данные для QR-кода (знакомство)"""
     ip: str
     port: int
     token: str
     serverName: str
 
 class PingResponseDto(BaseModel):
-    """Ответ для health-check."""
+    """health-check"""
     status: str
     server_name: str
 
 
-# "Хаб книги" (/structure)
+# /structure
 
 class BookManifestStructureDto(BaseModel):
     """
-    Облегченная версия манифеста для экрана структуры.
-    Включает готовые URL для обложки.
+    Облегченная версия манифеста для экрана структуры
     """
     book_name: str
     title: str = Field(description="Отображаемое название (обычно совпадает с book_name или из метаданных)")
@@ -38,7 +31,7 @@ class BookManifestStructureDto(BaseModel):
 
 class ChapterStubDto(BaseModel):
     """
-    Краткая информация о главе для списка.
+    Краткая информация о главе для списка
     """
     id: str
     title: str
@@ -50,17 +43,16 @@ class ChapterStubDto(BaseModel):
 class BookStructureResponseDto(BaseModel):
     """
     Ответ для GET /api/books/{bookId}/structure
-    Максимально легкий JSON.
     """
     manifest: BookManifestStructureDto
     chapters: List[ChapterStubDto]
 
 
-# "Список персонажей" (/characters)
+# /characters
 
 class CharacterListEntryDto(BaseModel):
     """
-    Элемент списка персонажей. Только фото и имя.
+    Элемент списка персонажей. Только фото и имя
     """
     id: str
     name: str
@@ -68,11 +60,11 @@ class CharacterListEntryDto(BaseModel):
     short_role: Optional[str] = Field(None, description="Короткая роль (пока не реализовано в бэкенде, резерв)")
 
 
-# "Детали персонажа" (/characters/{id})
+# /characters/{id}
 
 class CharacterDetailsDto(BaseModel):
     """
-    Полная информация о персонаже. Загружается точечно.
+    Полная информация о персонаже
     """
     id: str
     name: str
@@ -83,11 +75,11 @@ class CharacterDetailsDto(BaseModel):
     chapter_mentions: Dict[str, str] = Field(default_factory=dict)
 
 
-# "Инфо о главе" (/chapters/{id}/info)
+# /chapters/{id}/info
 
 class ChapterInfoDto(BaseModel):
     """
-    Превью главы (тизер и синопсис) перед прослушиванием.
+    Превью главы (тизер и синопсис) перед прослушиванием
     """
     chapter_id: str
     title: str
@@ -99,7 +91,7 @@ class ChapterInfoDto(BaseModel):
 
 class SyncMapEntryDto(BaseModel):
     """
-    Запись для синхронизации текста с большим аудиофайлом.
+    Запись для синхронизации текста с большим аудиофайлом
     """
     text: str
     start_ms: int
@@ -110,8 +102,7 @@ class SyncMapEntryDto(BaseModel):
 
 class PlaybackDataResponseDto(BaseModel):
     """
-    Формат ответа для плеера.
-    Аудио отдается одним файлом.
+    Формат ответа для плеера - все аудио в одном файле
     """
     audio_url: Optional[str] = Field(None, description="Ссылка на единый склеенный MP3 файл главы. Null, если аудио еще нет.")
     duration_ms: int = Field(description="Общая длительность аудиофайла в мс")
@@ -140,9 +131,6 @@ class ChapterSummaryDto(BaseModel):
     synopsis: str
 
 class BookDetailsResponseDto(BaseModel):
-    """
-    DEPRECATED: Полный, тяжелый ответ.
-    """
     manifest: BookManifestDto
     characters: List[CharacterDto]
     summaries: Dict[str, ChapterSummaryDto]

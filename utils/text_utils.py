@@ -2,7 +2,7 @@ import json
 import re
 from pathlib import Path
 
-
+# TODO: рассмотреть, насколько сейчас нужен этот метод. Раньше были проблемы с TXT, но при переходе на epub и парсинг с моей стороны это, похоже, бесполезно
 def cleanup_filename(name: str) -> str:
     """
     Очищает строку, чтобы ее можно было безопасно использовать в качестве имени файла.
@@ -28,18 +28,16 @@ def load_pronunciation_dictionary(path: Path) -> dict:
         return json.load(f)
 
 
+# TODO: при переходе на cosy voice посмотреть где возникают артифакты и пофиксить некоторые из них
 def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
     """
     Полный конвейер предобработки текста для TTS:
     1. Применяет словарь произношений.
     2. Очищает от нежелательных символов.
     """
-    # Применяем словарь произношений
     for word, pronunciation in dictionary.items():
-        # Используем word boundaries (\b) для замены только целых слов
         text = re.sub(r'\b' + re.escape(word) + r'\b', pronunciation, text, flags=re.IGNORECASE)
 
-    # Базовая очистка и нормализация текста
     text = text.replace('«', '').replace('»', '').replace('"', '')
     text = text.replace('!.', '!').replace('.!', '!')
     text = text.replace('?.', '?').replace('.?', '?')

@@ -25,7 +25,6 @@ TOKEN_FILE = Path(".server_token")
 def get_or_create_server_token() -> str:
     """
     Читает токен из .server_token. Если файла нет - создает его.
-    Это сохраняет токен между перезапусками сервера.
     """
     if TOKEN_FILE.exists():
         token = TOKEN_FILE.read_text("utf-8").strip()
@@ -44,7 +43,6 @@ def get_or_create_server_token() -> str:
     return token
 
 
-# Генерируем один раз при запуске сервера
 SERVER_TOKEN = get_or_create_server_token()
 
 

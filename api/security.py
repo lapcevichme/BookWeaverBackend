@@ -1,7 +1,3 @@
-"""
-Этот файл содержит зависимости FastAPI
-для проверки аутентификации.
-"""
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 

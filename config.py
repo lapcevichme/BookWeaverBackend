@@ -16,7 +16,7 @@ OUTPUT_DIR = BASE_DIR / "output"
 EXPORT_DIR = BASE_DIR / "export"
 TEMP_DIR = BASE_DIR / "temp"
 
-# --- Пути к ресурсам (ассетам) ---
+# --- Пути к ассетам ---
 # Эти файлы не меняются от запуска к запуску.
 VOICES_DIR = INPUT_DIR / "voices"
 EMOTION_REFERENCES_DIR = INPUT_DIR / "emotion_references"
@@ -30,6 +30,7 @@ EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_lib
 
 # --- Настройки моделей и API ---
 # Имена моделей для LLM
+# TODO: нахуя я выносил в env название моделей?? Грохнуть кстати надо google api, 2.5-flash слишком медленный стал
 FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
 POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.5-flash")
 
@@ -38,11 +39,11 @@ GENERATOR_LLM_TEMPERATURE = 0.5
 SUMMARY_LLM_TEMPERATURE = 0.5
 
 # Настройки TTS (Синтеза речи)
+# TODO: пересмотреть в целом работу с VC, так как все сломалось <3333
 VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 # --- Создание служебных директорий ---
-# Убедимся, что основные папки существуют
 OUTPUT_DIR.mkdir(exist_ok=True)
 EXPORT_DIR.mkdir(exist_ok=True)
 TEMP_DIR.mkdir(exist_ok=True)

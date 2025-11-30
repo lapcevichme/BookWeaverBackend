@@ -1,6 +1,3 @@
-"""
-Реализация API для мобильного приложения с поддержкой On-Demand Loading.
-"""
 import json
 import logging
 import re
@@ -333,7 +330,7 @@ async def get_chapter_playback_data(bookId: str, chapterId: str, force_rebuild: 
             except Exception as e:
                 logger.warning(f"Cache corrupted for {chapterId}, rebuilding... {e}")
 
-        # Проверяем наличие сценария (БЕЗ него мы вообще ничего не можем отдать)
+        # Проверяем наличие сценария (без него мы вообще ничего не можем отдать)
         if not context.scenario_file.exists():
             raise HTTPException(status_code=404,
                                 detail=f"Scenario not found for {chapterId}. Cannot build playback data.")
@@ -368,7 +365,7 @@ async def get_chapter_playback_data(bookId: str, chapterId: str, force_rebuild: 
                 sync_map=text_only_map
             )
 
-        # Если аудио ЕСТЬ, запускаем склейку (или пересборку)
+        # Если аудио ЕСТЬ, запускаем склейку
         subtitles_map = {}
         if context.subtitles_file.exists():
             try:
@@ -432,11 +429,9 @@ async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
         context = ProjectContext(book_name=bookId, volume_num=vol, chapter_num=chap)
         audio_path = context.chapter_audio_dir / audioFileName
 
-        # Прямое совпадение (например full_chapter.mp3)
         if audio_path.exists():
             return FileResponse(audio_path)
 
-        # Fallback для старых .wav файлов
         stem = audio_path.stem
         for ext in ['.wav', '.mp3', '.ogg', '.flac']:
             alt_path = context.chapter_audio_dir / f"{stem}{ext}"
@@ -453,7 +448,7 @@ async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
 
 
 # Global Ambient
-
+# TODO: пересмотреть логику эмбиентов на бэке: рассмотреть хранение в самой книге
 @static_router.get("/ambient/{ambientName}")
 async def get_global_ambient_file(ambientName: str):
     p = config.AMBIENT_DIR / ambientName

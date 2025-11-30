@@ -6,7 +6,7 @@ from core.data_models import Scenario
 
 logger = logging.getLogger(__name__)
 
-
+# TODO: ИСПОЛЬЗОВАТЬ ЭТОТ МЕТОД И ПРИ ЭКСПОРТЕ, ПОТОМ УДАЛИТЬ ТАМ ВЕСЬ LEGACY
 def merge_chapter_audio(
         scenario: Scenario,
         audio_dir: Path,

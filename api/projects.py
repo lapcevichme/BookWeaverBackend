@@ -59,7 +59,6 @@ async def import_project(file: UploadFile = File(...)):
 async def export_project(book_name: str):
     """
     Собирает готовый проект в .bw архив и отдает его для скачивания.
-    Предварительно проверяет, готов ли проект к экспорту.
     """
     # TODO: тут ввели логику, что должно быть аудио, но наверное достаточно манифеста (подумать)
     context = ProjectContext(book_name=book_name)
@@ -77,7 +76,7 @@ async def export_project(book_name: str):
 
     if chapters_with_tts == 0:
         raise HTTPException(
-            status_code=412, # Precondition Failed
+            status_code=412,
             detail="Проект не готов к экспорту. Нет ни одной полностью озвученной главы."
         )
 
@@ -85,7 +84,6 @@ async def export_project(book_name: str):
         exporter = BookExporter(book_name=book_name)
         archive_path = exporter.export()
 
-        # Отдаем файл для скачивания
         return FileResponse(
             path=archive_path,
             filename=archive_path.name,

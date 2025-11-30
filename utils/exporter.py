@@ -145,7 +145,7 @@ class BookExporter:
 if __name__ == '__main__':
     setup_logging()
 
-    DEFAULT_TEST_BOOK = "kusuriya-no-hitorigoto-ln-novel"
+    DEFAULT_TEST_BOOK = "kapitanskaya-dochka"
 
     parser = argparse.ArgumentParser(
         description="Сборка проекта книги в единый .bw архив для дистрибуции."

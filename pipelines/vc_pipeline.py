@@ -6,6 +6,7 @@ from services.model_manager import ModelManager
 
 logger = logging.getLogger(__name__)
 
+# FIXME!!!!!!!!!!!!!!!!!!!!!!!!! ЭТА ШТУКА ПЕРЕСТАЛА РАБОТАТЬ ТАК КАК КОЕ-КАКОЙ ВЕЛИКИЙ ЧЕЛОВЕК НА HUGGING FACE ЗАРУИНИЛ СВОЙ РЕПОЗИТОРИЙ
 
 class VCPipeline:
     """
@@ -31,7 +32,7 @@ class VCPipeline:
         update_progress(0.0, stage, f"Запуск эмоциональной окраски (VC) для главы {context.chapter_id}")
 
         try:
-            # Шаг 1: Загрузка сценария
+            # 1: Загрузка сценария
             update_progress(0.05, stage, "Загрузка файла сценария...")
             scenario = context.load_scenario()
             if not scenario:
@@ -46,7 +47,7 @@ class VCPipeline:
                 update_progress(1.0, "Ошибка", "Не удалось загрузить модель Voice Conversion. Прерывание.")
                 return
 
-            # Шаг 2: Обработка реплик
+            # 2: Обработка реплик
             stage = "Обработка реплик"
             update_progress(0.1, stage, "Начало применения эмоциональной окраски...")
             total_entries = len(scenario.entries)
@@ -95,7 +96,7 @@ class VCPipeline:
                     error_msg = f"Ошибка во время конвертации голоса для {audio_filename}: {e}"
                     logger.error(error_msg, exc_info=True)
 
-            # Шаг 3: Завершение
+            # 3: Завершение
             stage = "Завершение"
             final_message = f"Обработка завершена. Эмоции применены к {processed_count} аудиофайлам."
             update_progress(1.0, stage, final_message)

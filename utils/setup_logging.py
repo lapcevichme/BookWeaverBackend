@@ -5,7 +5,7 @@ from logging.handlers import RotatingFileHandler
 
 def setup_logging():
     """
-    Настраивает централизованную систему логирования для всего приложения.
+    Настраивает систему логирования для всего приложения.
     """
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
