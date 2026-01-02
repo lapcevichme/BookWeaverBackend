@@ -43,7 +43,5 @@ SUMMARY_LLM_TEMPERATURE = 0.5
 VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
-# --- Создание служебных директорий ---
-OUTPUT_DIR.mkdir(exist_ok=True)
-EXPORT_DIR.mkdir(exist_ok=True)
-TEMP_DIR.mkdir(exist_ok=True)
+for path in [OUTPUT_DIR, EXPORT_DIR, TEMP_DIR]:
+    path.mkdir(parents=True, exist_ok=True)
