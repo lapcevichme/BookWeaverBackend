@@ -3,11 +3,7 @@ import re
 import logging
 from typing import Type, TypeVar, Optional
 from threading import Lock
-
 from dotenv import load_dotenv
-import google.generativeai as genai
-from google.api_core import exceptions
-from google.generativeai.types import GenerationConfig, RequestOptions
 from pydantic import BaseModel, ValidationError
 
 load_dotenv()
@@ -18,13 +14,14 @@ PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
 
 class LLMService:
     """
-    Централизованный класс для работы с API Google Gemini с ленивой инициализацией.
+    Централизованный класс для работы с API Google Gemini с ПОЛНОСТЬЮ ленивой инициализацией.
     """
 
     def __init__(self, model_name: str, temperature: float = 0.5):
         self.model_name = model_name
-        self.config = GenerationConfig(temperature=temperature, response_mime_type="application/json")
+        self.temperature = temperature
         self._model = None
+        self._config = None
         self._lock = Lock()
         logger.info(f"Сервис LLMService для модели '{self.model_name}' сконфигурирован (ленивая загрузка).")
 
@@ -34,10 +31,34 @@ class LLMService:
         if self._model is None:
             with self._lock:
                 if self._model is None:
-                    logger.info(f"Инициализация клиента для LLM-модели: {self.model_name}...")
-                    self._model = genai.GenerativeModel(self.model_name)
-                    logger.info(f"✅ Клиент для модели '{self.model_name}' успешно инициализирован.")
+                    try:
+                        import google.generativeai as genai
+                    except ImportError:
+                        logger.critical("❌ Библиотека 'google-generativeai' не установлена!")
+                        return None
+
+                    logger.info(f"⏳ Инициализация клиента Gemini для модели: {self.model_name}...")
+                    try:
+                        self._model = genai.GenerativeModel(self.model_name)
+                        logger.info(f"✅ Клиент для модели '{self.model_name}' успешно инициализирован.")
+                    except Exception as e:
+                        logger.error(f"Ошибка при создании GenerativeModel: {e}", exc_info=True)
+                        return None
         return self._model
+
+    @property
+    def generation_config(self):
+        """Ленивое создание конфигурации."""
+        if self._config is None:
+            try:
+                from google.generativeai.types import GenerationConfig
+                self._config = GenerationConfig(
+                    temperature=self.temperature,
+                    response_mime_type="application/json"
+                )
+            except ImportError:
+                return None
+        return self._config
 
     def _sanitize_json_string(self, raw_text: str) -> str:
         """Очищает строку от невидимых управляющих символов."""
@@ -54,12 +75,23 @@ class LLMService:
 
     def call_for_pydantic(self, pydantic_model: Type[PydanticModel], prompt: str) -> Optional[PydanticModel]:
         """Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель."""
-        logger.info(f"Вызов LLM для Pydantic-модели: {pydantic_model.__name__}")
+        try:
+            from google.api_core import exceptions
+            from google.generativeai.types import RequestOptions
+        except ImportError:
+            logger.critical("Необходимые библиотеки Google AI не найдены.")
+            return None
 
+        if not self.model or not self.generation_config:
+            logger.error("LLM сервис не был инициализирован корректно.")
+            return None
+
+        logger.info(f"Вызов LLM для Pydantic-модели: {pydantic_model.__name__}")
         logger.debug(f"--- PROMPT SENT TO '{self.model_name}' ---\n{prompt}\n---------------------------------")
 
         response_text = None
         max_retries = 3
+
         for attempt in range(max_retries):
             try:
                 logger.info(f"Отправка запроса к LLM... (Попытка {attempt + 1}/{max_retries})")
@@ -67,7 +99,7 @@ class LLMService:
 
                 response = self.model.generate_content(
                     prompt,
-                    generation_config=self.config,
+                    generation_config=self.generation_config,
                     safety_settings={
                         'HARM_CATEGORY_HARASSMENT': 'BLOCK_NONE',
                         'HARM_CATEGORY_HATE_SPEECH': 'BLOCK_NONE',
@@ -78,8 +110,9 @@ class LLMService:
                 )
 
                 if not response.candidates:
-                    block_reason = response.prompt_feedback.block_reason.name if hasattr(response.prompt_feedback,
-                                                                                         'block_reason') else "Причина неизвестна"
+                    block_reason = "Причина неизвестна"
+                    if hasattr(response, 'prompt_feedback') and hasattr(response.prompt_feedback, 'block_reason'):
+                        block_reason = response.prompt_feedback.block_reason.name
                     logger.error(f"Запрос к LLM заблокирован! Причина: {block_reason}. Прекращаю попытки.")
                     return None
 
@@ -90,20 +123,16 @@ class LLMService:
             except exceptions.ResourceExhausted as e:
                 match = re.search(r"Please retry in ([\d.]+)s", str(e))
                 if match:
-                    delay = float(match.group(1)) + 1  # Добавляем 1 секунду на всякий случай
-                    logger.warning(
-                        f"Ошибка квоты API (429). API рекомендует подождать {delay:.2f} сек. Выполняю ожидание.")
+                    delay = float(match.group(1)) + 1
+                    logger.warning(f"Ошибка квоты API (429). Ждем {delay:.2f} сек.")
                     time.sleep(delay)
                 else:
                     wait_time = 2 ** (attempt + 1)
-                    logger.warning(
-                        f"Ошибка квоты API (429), но не удалось извлечь время ожидания. Повторная попытка через {wait_time} сек.")
+                    logger.warning(f"Ошибка квоты API (429). Повтор через {wait_time} сек.")
                     time.sleep(wait_time)
             except Exception as e:
                 wait_time = 2 ** (attempt + 1)
-                logger.warning(
-                    f"Неизвестная ошибка при вызове API Gemini: {e}. Повторная попытка через {wait_time} сек.",
-                    exc_info=True)
+                logger.warning(f"Ошибка API Gemini: {e}. Повтор через {wait_time} сек.", exc_info=True)
                 time.sleep(wait_time)
 
         if not response_text:

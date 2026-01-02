@@ -10,7 +10,8 @@ from services.vc_service import VCService
 class ModelManager:
     """
     Централизованный менеджер для управления доступом к AI-сервисам.
-    Гарантирует, что для каждого сервиса существует только один экземпляр (Singleton)
+    Гарантирует, что для каждого сервиса существует только один экземпляр.
+    Вся логика Singleton находится здесь.
     """
 
     def __init__(self):
@@ -24,7 +25,7 @@ class ModelManager:
         }
 
     def get_tts_service(self) -> TTSService:
-        """Возвращает singleton-экземпляр TTSService."""
+        """Возвращает экземпляр TTSService."""
         service_key = 'tts'
         if service_key not in self._services:
             with self._locks[service_key]:
@@ -33,7 +34,7 @@ class ModelManager:
         return self._services[service_key]
 
     def get_vc_service(self) -> VCService:
-        """Возвращает singleton-экземпляр VCService."""
+        """Возвращает экземпляр VCService."""
         service_key = 'vc'
         if service_key not in self._services:
             with self._locks[service_key]:
@@ -43,7 +44,7 @@ class ModelManager:
 
     def get_llm_service(self, service_type: str) -> LLMService:
         """
-        Возвращает singleton-экземпляр LLMService для конкретной задачи.
+        Возвращает экземпляр LLMService для конкретной задачи.
         """
         if service_type == 'character_analyzer':
             service_key = 'llm_character_analyzer'
