@@ -52,14 +52,17 @@ class LLMService:
         if self._config is None:
             try:
                 from google.generativeai.types import GenerationConfig
-                self._config = GenerationConfig(
-                    temperature=self.temperature,
-                    response_mime_type="application/json"
-                )
+                gen_config_args = {
+                    "temperature": self.temperature
+                }
+
+                if "gemma" not in self.model_name.lower():
+                    gen_config_args["response_mime_type"] = "application/json"
+
+                self._config = GenerationConfig(**gen_config_args)
             except ImportError:
                 return None
         return self._config
-
     def _sanitize_json_string(self, raw_text: str) -> str:
         """Очищает строку от невидимых управляющих символов."""
         control_char_regex = re.compile(r'[\x00-\x1F]')

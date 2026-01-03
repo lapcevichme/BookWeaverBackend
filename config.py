@@ -31,8 +31,9 @@ EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_lib
 # --- Настройки моделей и API ---
 # Имена моделей для LLM
 # TODO: нахуя я выносил в env название моделей?? Грохнуть кстати надо google api, 2.5-flash слишком медленный стал
-FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.0-flash")
-POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemini-2.5-flash")
+# UPD: сука хуесосы убили лимиты!!! Какие 20 запросов в день але???? И даже на нищую гемму лимит 15к токенов!!!!!!!
+FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
+POWERFUL_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
 
 ANALYZER_LLM_TEMPERATURE = 0.5
 GENERATOR_LLM_TEMPERATURE = 0.5
