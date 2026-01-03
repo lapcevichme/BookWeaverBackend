@@ -1,11 +1,11 @@
 import logging
 import shutil
-import zipfile
 import uuid
 import argparse
 import json
 from pathlib import Path
 from typing import Set
+
 import config
 from core.project_context import ProjectContext
 from utils.setup_logging import setup_logging
@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class BookExporter:
     """
     Утилита для сборки всех необходимых артефактов проекта
-    в единый, оптимизированный и портативный .bw (zip) архив с гранулированной структурой данных.
+    в единый, оптимизированный и портативный .bw (zip) архив.
     """
 
     def __init__(self, book_name: str):
@@ -28,73 +28,78 @@ class BookExporter:
         self.temp_build_dir = config.TEMP_DIR / f"temp_build_{self.book_name}_{uuid.uuid4().hex[:8]}"
 
         logger.debug(f"Инициализация экспортера для книги '{self.book_name}'")
-        logger.debug(f" -> Путь архива: {self.archive_path}")
-        logger.debug(f" -> Временная папка: {self.temp_build_dir}")
 
     def _cleanup(self):
         """Удаляет временную директорию сборки."""
         if self.temp_build_dir.exists():
-            logger.debug(f"Очистка временной директории: {self.temp_build_dir}")
             shutil.rmtree(self.temp_build_dir)
 
     def _write_json(self, data: dict, filename: str):
         """Записывает словарь в JSON-файл во временной директории."""
         path = self.temp_build_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
     def _copy_static_assets(self, used_ambients: Set[str]):
-        """Копирует статичные ассеты, такие как обложка и эмбиент."""
-        # Копирование обложки
+        """Копирует статичные ассеты (обложка, эмбиент)."""
+        # Обложка
         if self.context.cover_file.exists():
             shutil.copy2(self.context.cover_file, self.temp_build_dir / self.context.cover_file.name)
 
-        # Копирование используемых эмбиентов
+        # Эмбиент
         ambient_audio_dir = config.AMBIENT_DIR
         dest_ambient_dir = self.temp_build_dir / "ambient"
-        if not used_ambients or not ambient_audio_dir.exists():
-            return
-        dest_ambient_dir.mkdir(exist_ok=True)
-        for ambient_id in used_ambients:
-            found = False
-            for audio_file in ambient_audio_dir.glob(f"{ambient_id}.*"):
-                if audio_file.is_file():
-                    shutil.copy2(audio_file, dest_ambient_dir / audio_file.name)
-                    found = True
-                    break
-            if not found:
-                logger.warning(f"Аудиофайл для эмбиента '{ambient_id}' не найден.")
+
+        if used_ambients and ambient_audio_dir.exists():
+            dest_ambient_dir.mkdir(exist_ok=True)
+            for ambient_id in used_ambients:
+                found = False
+                for ext in ['.mp3', '.wav', '.ogg']:
+                    src = ambient_audio_dir / f"{ambient_id}{ext}"
+                    if src.exists():
+                        shutil.copy2(src, dest_ambient_dir / src.name)
+                        found = True
+                        break
+                if not found:
+                    logger.warning(f"Аудиофайл для эмбиента '{ambient_id}' не найден в библиотеке.")
 
     def export(self) -> Path | None:
         """
-        Основной метод, выполняющий сборку и архивацию проекта в единый файл.
+        Основной метод сборки проекта.
         """
         logger.info(f"Начало экспорта проекта: '{self.book_name}'")
         self._cleanup()
         self.temp_build_dir.mkdir(parents=True, exist_ok=True)
-        archive_created = False
 
         try:
-            # Загрузка и сохранение метаданных верхнего уровня
-            logger.info("Экспорт метаданных уровня книги (manifest, characters, summaries)...")
-            self._write_json(self.context.load_manifest().model_dump(mode='json'), "manifest.json")
-            self._write_json(self.context.load_character_archive().model_dump(mode='json'), "characters.json")
-            self._write_json(self.context.load_summary_archive().model_dump(mode='json'), "summaries.json")
+            logger.info("Экспорт метаданных...")
+
+            manifest = self.context.load_manifest()
+
+            if self.context.character_archive_file.exists():
+                shutil.copy2(self.context.character_archive_file, self.temp_build_dir / "characters.json")
 
             used_ambients = set()
+            total_book_duration = 0
 
-            # Обработка каждой главы
-            logger.info("Обработка глав...")
-            chapter_contexts = [ProjectContext(self.book_name, vol, chap) for vol, chap in
-                                self.context.get_ordered_chapters()]
+            content_dir = self.temp_build_dir / "content"
+            content_dir.mkdir()
 
-            for chapter_context in chapter_contexts:
-                logger.info(f" -> Глава: {chapter_context.chapter_id}")
-                chapter_output_dir = self.temp_build_dir / "chapters" / chapter_context.chapter_id
-                chapter_output_dir.mkdir(parents=True, exist_ok=True)
+            chapters = self.context.get_ordered_chapters()
+            logger.info(f"Обработка {len(chapters)} глав...")
 
-                scenario = chapter_context.load_scenario()
+            for vol, chap in chapters:
+                chapter_ctx = ProjectContext(self.book_name, vol, chap)
+                cid = chapter_ctx.chapter_id
+
+                logger.info(f" -> Глава: {cid}")
+
+                chapter_out_dir = content_dir / cid
+                chapter_out_dir.mkdir()
+
+                scenario = chapter_ctx.load_scenario()
                 if not scenario:
-                    logger.warning(f"Сценарий для главы {chapter_context.chapter_id} не найден. Пропуск.")
+                    logger.warning(f"Сценарий для {cid} не найден. Пропуск.")
                     continue
 
                 for entry in scenario.entries:
@@ -102,75 +107,76 @@ class BookExporter:
                         used_ambients.add(entry.ambient)
 
                 subtitles_map = {}
-                if chapter_context.subtitles_file.exists():
+                if chapter_ctx.subtitles_file.exists():
                     try:
-                        sub_json = json.loads(chapter_context.subtitles_file.read_text("utf-8"))
+                        sub_json = json.loads(chapter_ctx.subtitles_file.read_text("utf-8"))
                         if isinstance(sub_json, list):
-                            subtitles_map = {item.get("id"): item for item in sub_json if item.get("id")}
-                    except Exception as e:
-                        logger.warning(f"Ошибка чтения файла субтитров для {chapter_context.chapter_id}: {e}")
+                            subtitles_map = {item.get("audio_file").replace(".wav", ""): item for item in sub_json if
+                                             item.get("audio_file")}
+                    except Exception:
+                        pass
 
-                # Склейка аудио и генерация карты синхронизации
-                output_audio_file = chapter_output_dir / "full_chapter.mp3"
-                source_audio_dir = chapter_context.get_audio_output_dir()
+                # Склейка
+                full_audio_path = chapter_out_dir / "audio.mp3"
+                source_audio_dir = chapter_ctx.get_audio_output_dir()
+
+                duration_ms = 0
                 sync_map = []
 
-                if source_audio_dir.exists() and any(f.is_file() for f in source_audio_dir.iterdir()):
-                    _, sync_map = merge_chapter_audio(
+                if source_audio_dir.exists() and any(source_audio_dir.iterdir()):
+                    duration_ms, sync_map = merge_chapter_audio(
                         scenario=scenario,
                         audio_dir=source_audio_dir,
-                        output_file_path=output_audio_file,
+                        output_file_path=full_audio_path,
                         subtitles_map=subtitles_map
                     )
                 else:
-                    logger.info(f"Аудио для главы {chapter_context.chapter_id} не найдено. Будет создана текстовая карта.")
+                    logger.warning(f"Аудиофайлы для {cid} не найдены. Глава будет без звука.")
 
-                # Сохранение данных главы
+                total_book_duration += duration_ms
+
+                # "легкий" JSON для мобилки
                 chapter_data = {
+                    "id": cid,
+                    "duration_ms": duration_ms,
                     "scenario": scenario.model_dump(mode='json'),
                     "sync_map": sync_map
                 }
-                (chapter_output_dir / "chapter_data.json").write_text(
-                    json.dumps(chapter_data, ensure_ascii=False, indent=2), encoding='utf-8')
+                (chapter_out_dir / "data.json").write_text(
+                    json.dumps(chapter_data, ensure_ascii=False, indent=2), encoding='utf-8'
+                )
 
-            # Копирование статичных ассетов
+            manifest.meta.total_duration_ms = total_book_duration
+            for ch in manifest.structure:
+                ch.path = f"content/{ch.id}/data.json"  # Путь для плеера
+
+            self._write_json(manifest.model_dump(mode='json'), "manifest.json")
+
             self._copy_static_assets(used_ambients)
 
-            # Архивирование
-            logger.info(f"Архивация проекта в {self.archive_path.name}...")
-            with zipfile.ZipFile(self.archive_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-                for file_path in self.temp_build_dir.rglob('*'):
-                    arcname = file_path.relative_to(self.temp_build_dir)
-                    zipf.write(file_path, arcname)
+            # Архивация
+            logger.info(f"Сжатие в {self.archive_path.name}...")
+            shutil.make_archive(str(self.archive_path.with_suffix('')), 'zip', self.temp_build_dir)
 
-            archive_created = True
-            logger.info(f"✅ Экспорт успешно завершен! Архив: {self.archive_path}")
+            zip_path = self.archive_path.with_suffix('.zip')
+            if zip_path.exists():
+                shutil.move(str(zip_path), str(self.archive_path))
+
+            logger.info(f"✅ Экспорт завершен: {self.archive_path}")
+            return self.archive_path
 
         except Exception as e:
-            logger.error(f"🛑 Ошибка во время экспорта: {e}", exc_info=True)
+            logger.error(f"Экспорт провалился: {e}", exc_info=True)
             return None
         finally:
             self._cleanup()
 
-        return self.archive_path if archive_created else None
-
 
 if __name__ == '__main__':
     setup_logging()
-    DEFAULT_TEST_BOOK = "kapitanskaya-dochka"
-    parser = argparse.ArgumentParser(description="Сборка проекта книги в единый .bw архив для дистрибуции.")
-    parser.add_argument(
-        "book_name",
-        type=str,
-        nargs='?',
-        default=DEFAULT_TEST_BOOK,
-        help=f"Имя книги (имя папки). По умолчанию: {DEFAULT_TEST_BOOK}"
-    )
+    parser = argparse.ArgumentParser()
+    parser.add_argument("book_name", type=str, help="Имя папки книги")
     args = parser.parse_args()
-    print(f"--- Запуск экспорта для: {args.book_name} ---")
-    exporter = BookExporter(book_name=args.book_name)
-    archive_file = exporter.export()
-    if archive_file:
-        print(f"--- Готово. Файл сохранен: {archive_file} ---")
-    else:
-        print(f"--- Ошибка. Экспорт не удался. Смотрите лог выше. ---")
+
+    exporter = BookExporter(args.book_name)
+    exporter.export()

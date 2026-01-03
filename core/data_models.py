@@ -198,6 +198,7 @@ class ManifestChapterEntry(BaseModel):
     title: str
     src_dir: str
     status: str = "draft"  # draft, scenario_ready, audio_ready
+    path: Optional[str] = None
 
 
 class ManifestConfig(BaseModel):
