@@ -9,7 +9,6 @@ from uuid import UUID
 from core.project_context import ProjectContext
 from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList
 from services.model_manager import ModelManager
-from utils import file_utils
 from pipelines import prompts
 
 logger = logging.getLogger(__name__)
@@ -36,31 +35,39 @@ class CharacterAnalysisPipeline:
         try:
             context = ProjectContext(book_name=book_name)
             context.ensure_dirs()
-            all_chapters = file_utils.get_all_chapters(context.book_dir)
-            if not all_chapters:
-                update_progress(1.0, "Ошибка", "В проекте не найдено глав для анализа.")
+
+            ordered_chapters = context.get_ordered_chapters()
+
+            if not ordered_chapters:
+                update_progress(1.0, "Ошибка", "В манифесте проекта не найдено глав для анализа.")
                 return
 
             master_archive = context.load_character_archive()
             update_progress(0.05, stage, f"Загружен архив. Существующих персонажей: {len(master_archive.characters)}")
 
-            total_chapters = len(all_chapters)
+            total_chapters = len(ordered_chapters)
             stage = "Анализ глав"
-            for i, chap_path in enumerate(all_chapters):
+
+            for i, (vol_num, chap_num) in enumerate(ordered_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
 
-                vol_num, chap_num = file_utils.parse_vol_chap_from_path(chap_path)
-                chapter_id = f"vol_{vol_num}_chap_{chap_num}"
+                chapter_ctx = ProjectContext(book_name, vol_num, chap_num)
+                chapter_id = chapter_ctx.chapter_id
 
-                logger.info(f"--- Обработка главы [{i + 1}/{total_chapters}]: {chap_path.name} ---")
+                try:
+                    chapter_text = chapter_ctx.get_chapter_text()
+                except FileNotFoundError:
+                    logger.warning(f"Текст для главы {chapter_id} не найден. Пропуск.")
+                    continue
+
+                logger.info(f"--- Обработка главы [{i + 1}/{total_chapters}]: {chapter_id} ---")
 
                 if self._is_chapter_processed(master_archive, chapter_id):
                     logger.info(f"Глава {chapter_id} уже была проанализирована. Пропуск.")
                     continue
 
-                chapter_text = chap_path.read_text("utf-8")
                 if not chapter_text.strip():
-                    logger.warning(f"Файл главы {chap_path.name} пуст. Пропуск.")
+                    logger.warning(f"Текст главы {chapter_id} пуст. Пропуск.")
                     continue
 
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Поиск упоминаний...")
@@ -114,7 +121,8 @@ class CharacterAnalysisPipeline:
             {"id": str(char.id), "name": char.name, "aliases": char.aliases}
             for char in archive.characters
         ]
-        known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False, indent=2)
+        known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False, indent=2) if known_chars_for_recon else "[]"
+
         recon_prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json)
         return fast_llm.call_for_pydantic(CharacterReconResult, recon_prompt)
 
@@ -154,33 +162,26 @@ class CharacterAnalysisPipeline:
         char_map = {char.id: char for char in archive.characters}
         for patch in patch_list.patches:
             if patch.id and patch.id in char_map:
-                # ОБНОВЛЕНИЕ СУЩЕСТВУЮЩЕГО
                 existing_char = char_map[patch.id]
-                # Создаем словарь с обновлениями, исключая None значения и 'id'
                 update_data = patch.model_dump(exclude_unset=True, exclude={'id'})
 
-                # Объединение aliases
                 if 'aliases' in update_data and update_data['aliases']:
                     existing_aliases = set(existing_char.aliases)
                     new_aliases = set(update_data['aliases'])
                     update_data['aliases'] = sorted(list(existing_aliases.union(new_aliases)))
 
-                # Объединение chapter_mentions
                 if 'chapter_mentions' in update_data and update_data['chapter_mentions']:
-                    # Мы не можем просто обновить, так как model_copy не делает глубокое слияние
-                    # Поэтому обновляем вручную и удаляем из update_data
                     existing_char.chapter_mentions.update(update_data['chapter_mentions'])
                     del update_data['chapter_mentions']
 
                 if update_data:
                     updated_char = existing_char.model_copy(update=update_data)
                     char_map[patch.id] = updated_char
-                else:  # Если обновились только mentions
+                else:
                     char_map[patch.id] = existing_char
 
 
             elif patch.id is None and patch.name:
-                # СОЗДАНИЕ НОВОГО
                 new_char = Character(
                     name=patch.name,
                     description=patch.description or "Описание не предоставлено.",

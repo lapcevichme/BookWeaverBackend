@@ -1,11 +1,10 @@
 import json
 import logging
 from typing import Callable, Optional
-
 import numpy as np
 import soundfile as sf
-
 import config
+
 from core.project_context import ProjectContext
 from services.model_manager import ModelManager
 from utils import text_utils
@@ -39,8 +38,9 @@ class TTSPipeline:
             stage = "Загрузка данных"
             update_progress(0.02, stage, "Загрузка сервиса TTS...")
             tts_service = self.model_manager.get_tts_service()
+
             if not tts_service.tts_model:
-                raise RuntimeError("TTS модель не смогла загрузиться. Пайплайн остановлен.")
+                raise RuntimeError("TTS модель не смогла загрузиться. Проверьте установку coqui-tts.")
 
             update_progress(0.04, stage, "Загрузка файла сценария...")
             scenario = context.load_scenario()
@@ -49,11 +49,10 @@ class TTSPipeline:
 
             update_progress(0.06, stage, "Загрузка манифеста книги...")
             manifest = context.load_manifest()
-            if not manifest:
-                raise FileNotFoundError(f"Файл манифеста не найден для книги {context.book_name}.")
 
             update_progress(0.08, stage, "Загрузка архива персонажей...")
             character_archive = context.load_character_archive()
+            # Мапа Имя -> UUID
             char_name_to_id_map = {char.name: char.id for char in character_archive.characters}
 
             update_progress(0.1, stage, "Все данные успешно загружены.")
@@ -79,93 +78,99 @@ class TTSPipeline:
                 character_name = entry.speaker
                 voice_id = None
 
+                # Определяем голос
                 if character_name == "Рассказчик":
-                    voice_id = manifest.default_narrator_voice
+                    voice_id = manifest.config.default_narrator_voice
                 else:
                     character_uuid = char_name_to_id_map.get(character_name)
                     if character_uuid:
-                        voice_id = manifest.character_voices.get(character_uuid)
+                        voice_id = manifest.config.character_voices.get(character_uuid)
                         if not voice_id:
-                            logger.warning(
-                                f"Голос для '{character_name}' (ID: {character_uuid}) не найден в манифесте.")
+                            logger.warning(f"Голос для '{character_name}' не назначен. Использую дефолтный.")
                     else:
-                        logger.warning(f"Персонаж '{character_name}' из сценария не найден в архиве персонажей.")
+                        logger.warning(f"Персонаж '{character_name}' не найден в архиве.")
 
+                # Fallback
                 if not voice_id:
-                    logger.info(f"Для '{character_name}' будет использован голос рассказчика по умолчанию.")
-                    voice_id = manifest.default_narrator_voice
+                    voice_id = manifest.config.default_narrator_voice
 
-                if not voice_id:
-                    logger.error(
-                        f"ID голоса не определен для '{character_name}' и отсутствует голос рассказчика. Пропуск реплики {entry.id}.")
-                    continue
-
+                # Проверяем референс
                 speaker_wav_path = context.get_voice_path(voice_id)
                 if not speaker_wav_path.exists():
-                    logger.error(
-                        f"WAV-файл для голоса '{voice_id}' не найден ({speaker_wav_path}). Пропуск реплики {entry.id}.")
+                    logger.error(f"Файл голоса '{voice_id}' не найден: {speaker_wav_path}. Пропуск.")
                     continue
 
+                # Предобработка текста
                 processed_text = text_utils.preprocess_text_for_tts(entry.text, self.pronunciation_dict)
                 if not processed_text:
-                    logger.info(f"Текст реплики {entry.id} пуст. Пропуск.")
                     continue
 
-                synthesis_result = None
                 audio_duration_ms = 0
 
                 stage = "Синтез речи"
                 if not audio_path.exists():
-                    update_progress(progress, stage,
-                                    f"Реплика {i + 1}/{total_entries}: Синтез (Спикер: {character_name})")
+                    update_progress(progress, stage, f"[{i + 1}/{total_entries}] Синтез: {character_name}")
+
                     synthesis_result = tts_service.synthesize(processed_text, speaker_wav_path)
 
                     if synthesis_result:
-                        audio_duration_ms = int(
-                            (len(synthesis_result) / tts_service.tts_model.synthesizer.output_sample_rate) * 1000
-                        )
-                        sf.write(str(audio_path), np.array(synthesis_result),
-                                 tts_service.tts_model.synthesizer.output_sample_rate)
+                        sample_rate = tts_service.tts_model.synthesizer.output_sample_rate
+                        audio_duration_ms = int((len(synthesis_result) / sample_rate) * 1000)
+
+                        sf.write(str(audio_path), np.array(synthesis_result), sample_rate)
                     else:
-                        logger.error(f"Синтез речи (TTS) не удался для реплики {entry.id}.")
+                        logger.error(f"Сбой синтеза для реплики {entry.id}")
                         continue
                 else:
-                    logger.info(f"Аудио для {audio_filename} уже существует, пропуск синтеза.")
+                    logger.info(f"Файл {audio_filename} уже существует. Пропуск.")
                     try:
                         with sf.SoundFile(str(audio_path)) as f:
                             audio_duration_ms = int((f.frames / f.samplerate) * 1000)
-                    except Exception as e:
-                        logger.error(f"Не удалось прочитать существующий аудиофайл {audio_path}: {e}. Пропуск реплики.")
+                    except Exception:
                         continue
 
-                if audio_duration_ms == 0:
-                    logger.warning(
-                        f"Длительность аудио для реплики {entry.id} равна нулю. Пропуск генерации субтитров для нее.")
-                    continue
+                # Whisper Alignment
+                if audio_duration_ms > 0:
+                    stage = "Выравнивание (Whisper)"
+                    update_progress(progress, stage, "Генерация таймкодов...")
 
-                stage = "Создание субтитров"
-                update_progress(progress, stage, f"Реплика {i + 1}/{total_entries}: Генерация таймкодов...")
-                word_timings = tts_service.generate_word_timings(entry.text, audio_path)
+                    word_timings = tts_service.generate_word_timings(entry.text, audio_path)
 
-                subtitle_entry = self._create_subtitle_entry(
-                    audio_filename, entry.text, total_duration_ms, audio_duration_ms, word_timings
-                )
-                subtitles_data.append(subtitle_entry)
-                total_duration_ms += audio_duration_ms
+                    subtitle_entry = self._create_subtitle_entry(
+                        audio_filename, entry.text, total_duration_ms, audio_duration_ms, word_timings
+                    )
+                    subtitles_data.append(subtitle_entry)
+                    total_duration_ms += audio_duration_ms
 
-                with open(subtitle_path, 'w', encoding='utf-8') as f:
-                    json.dump(subtitles_data, f, ensure_ascii=False, indent=2)
+                    # Сохраняем субтитры после каждой фразы
+                    with open(subtitle_path, 'w', encoding='utf-8') as f:
+                        json.dump(subtitles_data, f, ensure_ascii=False, indent=2)
 
-            update_progress(1.0, "Завершено", f"Синтез речи для главы {context.chapter_id} успешно завершен!")
+            self._update_manifest_status(context)
+
+            update_progress(1.0, "Завершено", f"Глава {context.chapter_id} озвучена!")
 
         except Exception as e:
-            error_msg = f"Критическая ошибка в пайплайне TTS: {e}"
+            error_msg = f"Ошибка в TTS пайплайне: {e}"
             update_progress(1.0, "Ошибка", error_msg)
             logger.error(error_msg, exc_info=True)
             raise
 
+    def _update_manifest_status(self, context: ProjectContext):
+        """Обновляет статус главы на 'audio_ready'."""
+        try:
+            manifest = context.load_manifest()
+            for chapter in manifest.structure:
+                if chapter.id == context.chapter_id:
+                    chapter.status = "audio_ready"
+                    manifest.save(context.manifest_file)
+                    logger.info(f"Статус главы обновлен: {chapter.id} -> audio_ready")
+                    break
+        except Exception as e:
+            logger.warning(f"Не удалось обновить статус манифеста: {e}")
+
     def _create_subtitle_entry(self, audio_file, text, start_time_ms, duration_ms, word_timings):
-        """Создает структурированную запись для файла субтитров."""
+        """Формирует запись для JSON-субтитров."""
         words_data = []
         if word_timings:
             for item in word_timings:

@@ -13,7 +13,8 @@ from core.data_models import (
     Scenario,
     ScenarioEntry,
     AmbientTransitionList,
-    EmotionMap, ChapterSummaryArchive,
+    EmotionMap,
+    ChapterSummaryArchive,
 )
 from pipelines import prompts
 from services.model_manager import ModelManager
@@ -25,6 +26,7 @@ class ScenarioGenerationPipeline:
     """
     Класс-оркестратор, управляющий процессом генерации сценария для одной главы.
     """
+
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
         self._load_libraries()
@@ -34,16 +36,25 @@ class ScenarioGenerationPipeline:
         """Загружает вспомогательные библиотеки (эмбиент, эмоции)."""
         logger.info("Загрузка библиотек для генерации сценария...")
         try:
-            self.ambient_library = json.loads(config.AMBIENT_LIBRARY_FILE.read_text("utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.warning(f"Не удалось загрузить библиотеку эмбиента: {e}")
+            if config.AMBIENT_LIBRARY_FILE.exists():
+                self.ambient_library = json.loads(config.AMBIENT_LIBRARY_FILE.read_text("utf-8"))
+            else:
+                logger.warning(f"Файл библиотеки эмбиента не найден: {config.AMBIENT_LIBRARY_FILE}")
+                self.ambient_library = []
+        except json.JSONDecodeError as e:
+            logger.warning(f"Ошибка чтения библиотеки эмбиента: {e}")
             self.ambient_library = []
 
         try:
-            self.emotion_library = json.loads(config.EMOTION_REFERENCE_LIBRARY_FILE.read_text("utf-8"))
-            self.available_emotions = list(self.emotion_library.keys())
-        except (FileNotFoundError, json.JSONDecodeError) as e:
-            logger.warning(f"Не удалось загрузить библиотеку эмоций: {e}")
+            if config.EMOTION_REFERENCE_LIBRARY_FILE.exists():
+                self.emotion_library = json.loads(config.EMOTION_REFERENCE_LIBRARY_FILE.read_text("utf-8"))
+                self.available_emotions = list(self.emotion_library.keys())
+            else:
+                logger.warning(f"Файл библиотеки эмоций не найден: {config.EMOTION_REFERENCE_LIBRARY_FILE}")
+                self.emotion_library = {}
+                self.available_emotions = []
+        except json.JSONDecodeError as e:
+            logger.warning(f"Ошибка чтения библиотеки эмоций: {e}")
             self.emotion_library = {}
             self.available_emotions = []
 
@@ -61,20 +72,17 @@ class ScenarioGenerationPipeline:
 
         try:
             context.ensure_dirs()
-            # 0: Определение путей для кэша
             raw_scenario_path = context.raw_scenario_cache_file
             ambient_enriched_path = context.ambient_cache_file
 
-            # 1: Загрузка исходных данных
             stage = "Загрузка данных"
             update_progress(0.1, stage, "Загрузка архива персонажей...")
             character_archive = context.load_character_archive()
             update_progress(0.12, stage, "Загрузка архива пересказов...")
             summary_archive = context.load_summary_archive()
             update_progress(0.15, stage,
-                            f"Архивы персонажей ({len(character_archive.characters)} шт.) и пересказов ({len(summary_archive.summaries)} шт.) успешно загружены.")
+                            f"Архивы загружены. Персонажей: {len(character_archive.characters)}. Пересказов: {len(summary_archive.summaries)}.")
 
-            # 2: Генерация "сырого" сценария
             stage = "Генерация сценария"
             if raw_scenario_path.exists():
                 update_progress(0.2, stage, "Обнаружен кэш 'сырого' сценария, используется он.")
@@ -86,12 +94,12 @@ class ScenarioGenerationPipeline:
                 raw_scenario = self._generate_raw_scenario(context, contextual_characters, summary_archive)
                 if not raw_scenario:
                     raise ValueError("LLM не смогла сгенерировать 'сырой' сценарий.")
+
                 raw_scenario_path.write_text(raw_scenario.model_dump_json(indent=2), encoding="utf-8")
                 update_progress(0.5, stage, f"Промежуточный результат сохранен в {raw_scenario_path.name}")
 
             scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
-            # 3: Обогащение эмбиентом
             stage = "Анализ эмбиента"
             if ambient_enriched_path.exists():
                 update_progress(0.55, stage, "Обнаружен кэш данных по эмбиенту, используется он.")
@@ -103,14 +111,13 @@ class ScenarioGenerationPipeline:
                                                  encoding="utf-8")
                 update_progress(0.7, stage, f"Промежуточный результат сохранен в {ambient_enriched_path.name}")
 
-            # 4: Обогащение эмоциями
             stage = "Анализ эмоций"
+            # TODO: Добавить кэширование для эмоций тоже
             update_progress(0.75, stage, "Отправка запроса к LLM для анализа эмоций...")
             emotion_enriched_scenario = self._enrich_with_emotions(ambient_enriched_scenario, character_archive,
                                                                    context.chapter_id)
             update_progress(0.85, stage, "Анализ эмоций завершен.")
 
-            # 5: Финальная обработка и сохранение
             stage = "Финализация"
             update_progress(0.9, stage, "Сборка финального сценария...")
             final_entries = [ScenarioEntry(**entry_data) for entry_data in emotion_enriched_scenario]
@@ -118,10 +125,12 @@ class ScenarioGenerationPipeline:
             update_progress(0.95, stage, "Сохранение файла сценария на диск...")
             final_scenario.save(context.scenario_file)
 
-            # 6: Очистка временных файлов
-            raw_scenario_path.unlink(missing_ok=True)
-            ambient_enriched_path.unlink(missing_ok=True)
-            update_progress(0.98, stage, "Временные файлы кэша удалены.")
+            self._update_manifest_status(context)
+
+            # Чистка кэшей TODO: раскомментить!
+            # raw_scenario_path.unlink(missing_ok=True)
+            # ambient_enriched_path.unlink(missing_ok=True)
+            # update_progress(0.98, stage, "Временные файлы кэша удалены.")
 
             update_progress(1.0, "Завершено", f"Сценарий для главы {context.chapter_id} успешно сгенерирован!")
 
@@ -135,6 +144,24 @@ class ScenarioGenerationPipeline:
             update_progress(1.0, "Ошибка", error_msg)
             logger.error(f"Критическая непредвиденная ошибка в пайплайне", exc_info=True)
             raise e
+
+    def _update_manifest_status(self, context: ProjectContext):
+        """Обновляет статус главы в манифесте на 'scenario_ready'."""
+        try:
+            manifest = context.load_manifest()
+            updated = False
+            for chapter in manifest.structure:
+                if chapter.id == context.chapter_id:
+                    if chapter.status != "audio_ready":
+                        chapter.status = "scenario_ready"
+                        updated = True
+                    break
+
+            if updated:
+                manifest.save(context.manifest_file)
+                logger.info(f"📝 Манифест обновлен: статус главы {context.chapter_id} -> 'scenario_ready'")
+        except Exception as e:
+            logger.warning(f"Не удалось обновить статус в манифесте: {e}")
 
     def _get_contextual_characters(self, archive: CharacterArchive, chapter_id: str) -> CharacterArchive:
         """
@@ -206,7 +233,6 @@ class ScenarioGenerationPipeline:
     def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str) -> List[Dict]:
         """
         Определяет эмоции для всех реплик, где спикер - не "Рассказчик".
-        Это включает в себя и диалоги, и внутренние монологи.
         """
         fast_llm = self.model_manager.get_llm_service('character_analyzer')
 
@@ -238,7 +264,6 @@ class ScenarioGenerationPipeline:
 
         if not emotion_map_data:
             logger.error("LLM не смогла проанализировать эмоции.")
-            # Установим эмоцию по умолчанию для диалогов, если анализ не удался
             for entry in entries:
                 if entry.get('speaker') != "Рассказчик" and 'emotion' not in entry:
                     entry['emotion'] = 'нейтрально'
@@ -255,7 +280,7 @@ class ScenarioGenerationPipeline:
             else:
                 logger.warning(f"LLM вернула ID реплики, которого нет в сценарии: '{entry_id_str}'. Пропускаю.")
 
-        # Убедимся, что у всех реплик персонажей есть эмоция (на случай, если LLM что-то пропустила)
+        # Fallback для пропущенных реплик
         for entry in entries:
             if entry.get('speaker') != "Рассказчик" and 'emotion' not in entry:
                 entry['emotion'] = 'нейтрально'
