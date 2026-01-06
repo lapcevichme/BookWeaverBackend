@@ -1,11 +1,14 @@
+import os
 from threading import Lock
 from typing import Dict
+from dotenv import load_dotenv
 
 import config
 from services.llm_service import LLMService
 from services.tts_service import TTSService
 from services.vc_service import VCService
 
+load_dotenv()
 
 class ModelManager:
     """
@@ -46,6 +49,14 @@ class ModelManager:
         """
         Возвращает экземпляр LLMService для конкретной задачи.
         """
+        provider = getattr(config, 'LLM_PROVIDER', 'google')
+
+        api_key = None
+        if provider == 'openrouter':
+            api_key = os.getenv('OPENROUTER_API_KEY')
+        elif provider == 'google':
+            api_key = os.getenv('GOOGLE_API_KEY')
+
         if service_type == 'character_analyzer':
             service_key = 'llm_character_analyzer'
             model_name = config.FAST_MODEL_NAME
@@ -64,5 +75,10 @@ class ModelManager:
         if service_key not in self._services:
             with self._locks[service_key]:
                 if service_key not in self._services:
-                    self._services[service_key] = LLMService(model_name=model_name, temperature=temperature)
+                    self._services[service_key] = LLMService(
+                        model_name=model_name,
+                        temperature=temperature,
+                        provider=provider,
+                        api_key=api_key
+                    )
         return self._services[service_key]
