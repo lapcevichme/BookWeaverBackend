@@ -1,8 +1,8 @@
-import json
 import logging
-from typing import Optional
+from typing import Optional, Dict, Any
 
 from core.project_context import ProjectContext
+from core.data_models import BookManifest, ManifestChapterEntry, ManifestMeta
 from utils import file_utils
 from utils.setup_logging import setup_logging
 
@@ -11,127 +11,95 @@ logger = logging.getLogger(__name__)
 
 def init_manifest(
         book_name: str,
-        known_title: Optional[str] = None,
-        known_author: Optional[str] = None
+        metadata: Optional[Dict[str, Any]] = None
 ):
     """
-    Создает или обновляет manifest.json.
-    Использует ProjectContext для определения путей.
+    Создает manifest.json.
+    Строгий режим: старые невалидные манифесты игнорируются.
     """
+    if metadata is None:
+        metadata = {}
+
     logger.info(f"🏁 ЗАПУСК ИНИЦИАЛИЗАЦИИ МАНИФЕСТА: '{book_name}'")
 
     context = ProjectContext(book_name=book_name)
-
     book_src_dir = context.book_dir
-    output_dir = context.book_output_dir
     manifest_path = context.manifest_file
-
-    logger.info(f"📁 Путь к исходникам (INPUT): {book_src_dir}")
-    logger.info(f"📁 Путь к результатам (OUTPUT): {output_dir}")
 
     if not book_src_dir.exists():
         logger.error(f"❌ ПАПКА НЕ НАЙДЕНА: {book_src_dir}")
-        logger.error("Убедитесь, что файлы книги находятся в правильной директории.")
         return
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    logger.info("🔎 Сканирование файловой структуры...")
+    context.book_output_dir.mkdir(parents=True, exist_ok=True)
 
     chapter_paths = file_utils.get_all_chapters(book_src_dir)
-
-    if not chapter_paths:
-        logger.warning("⚠️ Внимание: В папке книги не найдено текстовых файлов (chapter_*.txt)!")
-    else:
-        logger.info(f"✅ Найдено файлов глав: {len(chapter_paths)}")
-        logger.debug(f"Первый найденный файл: {chapter_paths[0].name}")
-
-    structure = []
-    logger.info("⚙️ Сборка структуры глав...")
+    structure_entries = []
 
     for idx, path in enumerate(chapter_paths, 1):
         try:
             vol, chap = file_utils.parse_vol_chap_from_path(path)
 
             chapter_ctx = ProjectContext(book_name, vol, chap)
-            chapter_id = chapter_ctx.chapter_id
-
             status = "draft"
-            status_reason = "только текст"
-
             if chapter_ctx.chapter_audio_dir.exists() and any(chapter_ctx.chapter_audio_dir.iterdir()):
                 status = "audio_ready"
-                status_reason = "аудио есть"
-            elif chapter_ctx.scenario_file.exists():
-                status = "scenario_ready"
-                status_reason = "сценарий есть"
 
             display_title = f"Глава {chap}"
-            if vol > 1:
-                display_title += f" (Том {vol})"
+            if vol > 1: display_title += f" (Том {vol})"
 
-            structure.append({
-                "order": idx,
-                "id": chapter_id,
-                "title": display_title,
-                "src_dir": chapter_id,
-                "status": status
-            })
-
-            if idx == 1 or idx == len(chapter_paths):
-                logger.debug(f"   -> Глава {idx}: {chapter_id} [{status}] ({status_reason})")
+            entry = ManifestChapterEntry(
+                order=idx,
+                title=display_title,
+                vol=vol,
+                chap=chap,
+                status=status
+            )
+            structure_entries.append(entry)
 
         except Exception as e:
-            logger.error(f"❌ Ошибка обработки пути {path}: {e}")
+            logger.error(f"Ошибка с файлом {path}: {e}")
 
-    logger.info("📝 Подготовка метаданных...")
-
-    current_meta = {}
+    old_manifest = None
     if manifest_path.exists():
-        logger.info(f"📂 Найден существующий манифест. Читаем данные...")
+        logger.info("📂 Обнаружен существующий manifest.json")
         try:
-            old_manifest = json.loads(manifest_path.read_text("utf-8"))
-            current_meta = old_manifest.get("meta", {})
-            logger.info(f"   -> Текущее название в файле: '{current_meta.get('title')}'")
-        except Exception as e:
-            logger.error(f"❌ Ошибка чтения старого манифеста: {e}")
+            old_manifest = BookManifest.load(manifest_path)
+            logger.info("✅ Старый манифест валиден. Данные будут объединены.")
+        except Exception:
+            logger.warning("⚠️ СТАРЫЙ МАНИФЕСТ НЕСОВМЕСТИМ (LEGACY). ОН БУДЕТ ПЕРЕЗАПИСАН.")
+            old_manifest = None
 
-    final_title = current_meta.get("title") or known_title or "Название книги (измените в manifest.json)"
-    final_author = current_meta.get("author") or known_author or "Автор (измените в manifest.json)"
+    old_meta = old_manifest.meta if old_manifest else ManifestMeta()
 
-    if final_title == "Название книги (измените в manifest.json)":
-        logger.warning("⚠️ Используется дефолтное название книги! (Данные не найдены)")
+    final_meta = ManifestMeta(
+        title=metadata.get("title") or old_meta.title,
+        author=metadata.get("author") or old_meta.author,
+        description=metadata.get("description") or old_meta.description,
+        tags=metadata.get("tags") or old_meta.tags,
+        source_url=metadata.get("source_url") or old_meta.source_url,
+        status=metadata.get("status") or old_meta.status,
+        version=old_meta.version,
+        total_duration_ms=old_meta.total_duration_ms,
+        cover_image=metadata.get("cover_image") or old_meta.cover_image,
+        language=metadata.get("language") or old_meta.language or "ru"
+    )
 
-    new_meta = {
-        "title": final_title,
-        "author": final_author,
-        "version": current_meta.get("version", "1.0"),
-        "total_duration_ms": current_meta.get("total_duration_ms", 0)
-    }
+    new_manifest = BookManifest(
+        project_id=book_name,
+        meta=final_meta,
+        structure=structure_entries
+    )
 
-    new_manifest = {
-        "project_id": book_name,
-        "meta": new_meta,
-        "structure": structure,
-        "config": {
-            "notes": "Generated by init_manifest.py",
-            "last_run_log": f"Found {len(structure)} chapters"
-        }
-    }
+    if old_manifest and old_manifest.config:
+        new_manifest.config = old_manifest.config
 
-    if manifest_path.exists() and "config" in old_manifest:
-        merged_config = new_manifest["config"]
-        merged_config.update(old_manifest.get("config", {}))
-        new_manifest["config"] = merged_config
+    new_manifest.config.last_run_log = f"Found {len(structure_entries)} chapters"
 
-    manifest_path.write_text(json.dumps(new_manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    new_manifest.save(manifest_path)
 
-    logger.info("-" * 40)
-    logger.info(f"💾 МАНИФЕСТ СОХРАНЕН: {manifest_path}")
-    logger.info(f"   📚 Книга: {final_title}")
-    logger.info("-" * 40)
+    logger.info(f"💾 МАНИФЕСТ ОБНОВЛЕН: {final_meta.title} ({len(structure_entries)} глав)")
 
 
 if __name__ == "__main__":
     setup_logging()
-    init_manifest("kapitanskaya-dochka")
+    init_manifest("test_book", {"title": "Test"})
