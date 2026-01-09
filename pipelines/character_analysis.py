@@ -198,7 +198,8 @@ class CharacterAnalysisPipeline:
                     spoiler_free_description=patch.spoiler_free_description or "Новый персонаж.",
                     aliases=patch.aliases or [],
                     role_tier=patch.role_tier or "minor",
-                    chapter_mentions=patch.chapter_mentions or {}
+                    chapter_mentions=patch.chapter_mentions or {},
+                    gender=patch.gender
                 )
 
                 if patch.timeline_voice_update:
