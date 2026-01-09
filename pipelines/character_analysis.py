@@ -52,6 +52,8 @@ class CharacterAnalysisPipeline:
                 return
 
             master_archive = context.load_character_archive()
+            summary_archive = context.load_summary_archive()
+
             total_chapters = len(ordered_chapters)
             stage = "Анализ глав"
 
@@ -72,9 +74,15 @@ class CharacterAnalysisPipeline:
                 if not chapter_text.strip():
                     continue
 
+                chapter_summary_text = None
+                if chapter_id in summary_archive.summaries:
+                    chapter_summary_text = summary_archive.summaries[chapter_id].synopsis
+                else:
+                    logger.warning(f"⚠️ Для главы {chapter_id} нет саммари! RAG отключен.")
+
                 # Разведка
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Разведка...")
-                recon_result = self._perform_recon(master_archive, chapter_text)
+                recon_result = self._perform_recon(master_archive, chapter_text, chapter_summary_text)
 
                 if not recon_result or (not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
                     continue
@@ -128,11 +136,15 @@ class CharacterAnalysisPipeline:
 
         return False
 
-    def _perform_recon(self, archive: CharacterArchive, chapter_text: str) -> Optional[CharacterReconResult]:
+    def _perform_recon(self, archive: CharacterArchive, chapter_text: str, chapter_summary: Optional[str] = None) -> Optional[CharacterReconResult]:
+        """
+        Выполняет 'умную разведку' с использованием саммари.
+        """
         fast_llm = self.model_manager.get_llm_service('character_analyzer')
         known_chars_for_recon = [{"id": str(char.id), "name": char.name} for char in archive.characters]
         known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False) if known_chars_for_recon else "[]"
-        prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json)
+
+        prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json, chapter_summary)
         return fast_llm.call_for_pydantic(CharacterReconResult, prompt)
 
     def _perform_operation(self, relevant_chars_json: str, new_names: List[str], text: str, vol: int, chap: int) -> Optional[CharacterPatchList]:

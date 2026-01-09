@@ -93,9 +93,22 @@ def format_summary_generation_prompt(
 
 
 # --- ПРОМПТЫ ДЛЯ АНАЛИЗА ПЕРСОНАЖЕЙ ---
-def format_character_recon_prompt(chapter_text: str, known_characters_json: str) -> str:
-    """Промпт для 'умной разведки'."""
+def format_character_recon_prompt(chapter_text: str, known_characters_json: str, chapter_summary: Optional[str] = None) -> str:
+    """
+    Промпт для 'умной разведки'.
+    Теперь включает контекст саммари для устранения неоднозначностей.
+    """
     schema_description = generate_human_schema(CharacterReconResult)
+
+    summary_block = ""
+    if chapter_summary:
+        summary_block = f"""
+=== КОНТЕКСТ ГЛАВЫ ===
+Используй это краткое содержание как "истину" для разрешения споров о именах.
+Если в тексте написано "Служанка", а в саммари сказано, что это Маомао - используй имя "Маомао".
+САММАРИ:
+{chapter_summary}
+"""
 
     return f"""
 Твоя задача - провести "разведку" персонажей в тексте главы.
@@ -106,10 +119,12 @@ def format_character_recon_prompt(chapter_text: str, known_characters_json: str)
 3.  Сопоставь упоминания в тексте с персонажами из списка.
 4.  Определи персонажей, которых нет в списке.
 
+{summary_block}
+
 ПРАВИЛА:
 -   В `mentioned_existing_character_ids` должны попасть только **ID** из списка.
 -   В `newly_discovered_names` включай только тех, кого точно нет.
--   Игнорируй общие понятия ("девушка", "солдат").
+-   Игнорируй общие понятия ("девушка", "солдат"), если они не являются важными действующими лицами согласно Саммари.
 
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
@@ -166,7 +181,9 @@ def format_character_patch_prompt(
 
 - **timeline_visual_update (ВНЕШНОСТЬ):**
   - Заполняй, если изменилась одежда (надел доспехи) или тело (шрамы, прическа).
-  - `image_prompt`: Напиши готовый промпт на АНГЛИЙСКОМ для генерации картинки (например: "medieval knight, shining armor, blood on face, holding sword, realistic").
+  - **СТИЛЬ:** НЕ пиши слова 'realistic', 'anime', '4k'. Описывай ТОЛЬКО контент (одежда, поза, окружение).
+  - **БЕЗОПАСНОСТЬ:** Заменяй чувствительные роли на визуальные синонимы (Slave -> Servant).
+  - `image_prompt`: Напиши готовый промпт на АНГЛИЙСКОМ (например: "medieval knight, shining armor, blood on face, holding sword").
 
 === 3. ОСТАЛЬНОЕ ===
 - **chapter_mentions:** Одно предложение о действиях персонажа в этой главе (контекст).
