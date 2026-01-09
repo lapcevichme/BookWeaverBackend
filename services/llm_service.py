@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
 
+PRICING_REGISTRY = {
+    "xiaomi/mimo-v2-flash:free" : {"input": 0.0, "output": 0.0}
+}
 
 class LLMService:
     """
@@ -28,6 +31,11 @@ class LLMService:
         self._client = None
         self._config = None
         self._lock = Lock()
+
+        self.total_input_tokens = 0
+        self.total_output_tokens = 0
+        self.total_cost = 0.0
+
         logger.info(
             f"Сервис LLMService сконфигурирован: провайдер '{self.provider}', модель '{self.model_name}' (ленивая загрузка).")
 
@@ -132,11 +140,35 @@ class LLMService:
         if match: return match.group(1).strip()
         return None
 
+    def _track_usage(self, input_tokens: int, output_tokens: int):
+        """Считает стоимость и обновляет статистику."""
+        self.total_input_tokens += input_tokens
+        self.total_output_tokens += output_tokens
+
+        price_info = PRICING_REGISTRY.get(self.model_name)
+        if not price_info:
+            for key, val in PRICING_REGISTRY.items():
+                if key in self.model_name:
+                    price_info = val
+                    break
+
+        cost = 0.0
+        if price_info:
+            input_cost = (input_tokens / 1_000_000) * price_info["input"]
+            output_cost = (output_tokens / 1_000_000) * price_info["output"]
+            cost = input_cost + output_cost
+            self.total_cost += cost
+
+            logger.info(
+                f"💰 Cost: ${cost:.5f} (In: {input_tokens}, Out: {output_tokens}) | Total: ${self.total_cost:.4f}")
+        else:
+            logger.debug(f"ℹ️ Usage: In: {input_tokens}, Out: {output_tokens} (Price not found for {self.model_name})")
+
     def call_for_pydantic(self, pydantic_model: Type[PydanticModel], prompt: str) -> Optional[PydanticModel]:
         """Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель."""
 
         logger.debug(
-            f"--- PROMPT SENT TO '{self.model_name}' (Provider: {self.provider}) ---\n{prompt}\n---------------------------------")
+            f"--- PROMPT SENT TO '{self.model_name}' (Provider: {self.provider}) ---\n{prompt[:200]}...\n---------------------------------")
 
         if self.provider == "openrouter":
             return self._call_openrouter(pydantic_model, prompt)
@@ -181,6 +213,11 @@ class LLMService:
                         block_reason = response.prompt_feedback.block_reason.name
                     logger.error(f"Запрос к LLM заблокирован! Причина: {block_reason}. Прекращаю попытки.")
                     return None
+
+                if hasattr(response, 'usage_metadata'):
+                    in_tok = response.usage_metadata.prompt_token_count
+                    out_tok = response.usage_metadata.candidates_token_count
+                    self._track_usage(in_tok, out_tok)
 
                 response_text = response.text
                 logger.info("Ответ от Google LLM успешно получен.")
@@ -232,6 +269,11 @@ class LLMService:
                     response_format={"type": "json_object"}
                 )
 
+                if hasattr(completion, 'usage') and completion.usage:
+                    in_tok = completion.usage.prompt_tokens
+                    out_tok = completion.usage.completion_tokens
+                    self._track_usage(in_tok, out_tok)
+
                 response_text = completion.choices[0].message.content
                 logger.info("Ответ от OpenRouter успешно получен.")
                 break
@@ -256,8 +298,7 @@ class LLMService:
             logger.error(f"Не удалось получить ответ от модели '{self.model_name}'.")
             return None
 
-        logger.debug(
-            f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text}\n---------------------------------")
+        logger.debug(f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text[:200]}...\n---------------------------------")
 
         json_str = self._extract_json_from_response(self._sanitize_json_string(response_text))
         if not json_str:
