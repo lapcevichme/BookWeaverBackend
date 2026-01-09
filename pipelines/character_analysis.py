@@ -15,12 +15,22 @@ logger = logging.getLogger(__name__)
 
 
 class CharacterAnalysisPipeline:
-    """
-    1. Разведка: Быстрый поиск релевантных персонажей в главе.
-    2. Операция: Глубокий анализ и создание 'патча' для обновления архива.
-    """
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
+
+        # BLACKLIST ТОЛЬКО ДЛЯ ПЕРЕИМЕНОВАНИЯ
+        # Не удаляем персонажей с такими именами, просто запрещаем переименовывать нормальные имена в эти.
+        # TODO: как-то в промптах дать модели знать, что нельзя так переименовывать - но вот галлюцинации хз как обойти.
+        self.GENERIC_ROLES_BLACKLIST = {
+            "доктор", "врач", "лекарь", "целитель",
+            "служанка", "горничная", "фрейлина", "слуга",
+            "стражник", "солдат", "офицер", "генерал",
+            "евнух", "император", "супруга", "наложница",
+            "повар", "кучер", "бандит", "вор",
+            "деревенщина", "крестьянин", "житель",
+            "мальчик", "девочка", "старик", "старуха", "мужчина", "женщина"
+        }
+
         logger.info("✅ Пайплайн CharacterAnalysisPipeline инициализирован.")
 
     def run(self, book_name: str, progress_callback: Optional[Callable[[float, str, str], None]] = None):
@@ -35,116 +45,172 @@ class CharacterAnalysisPipeline:
         try:
             context = ProjectContext(book_name=book_name)
             context.ensure_dirs()
-
             ordered_chapters = context.get_ordered_chapters()
 
             if not ordered_chapters:
-                update_progress(1.0, "Ошибка", "В манифесте проекта не найдено глав для анализа.")
+                update_progress(1.0, "Ошибка", "В манифесте проекта не найдено глав.")
                 return
 
             master_archive = context.load_character_archive()
-            update_progress(0.05, stage, f"Загружен архив. Существующих персонажей: {len(master_archive.characters)}")
-
             total_chapters = len(ordered_chapters)
             stage = "Анализ глав"
 
             for i, (vol_num, chap_num) in enumerate(ordered_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
-
                 chapter_ctx = ProjectContext(book_name, vol_num, chap_num)
                 chapter_id = chapter_ctx.chapter_id
 
                 try:
                     chapter_text = chapter_ctx.get_chapter_text()
                 except FileNotFoundError:
-                    logger.warning(f"Текст для главы {chapter_id} не найден. Пропуск.")
                     continue
 
-                logger.info(f"--- Обработка главы [{i + 1}/{total_chapters}]: {chapter_id} ---")
-
                 if self._is_chapter_processed(master_archive, chapter_id):
-                    logger.info(f"Глава {chapter_id} уже была проанализирована. Пропуск.")
+                    logger.info(f"Глава {chapter_id} пропущена (уже есть в базе).")
                     continue
 
                 if not chapter_text.strip():
-                    logger.warning(f"Текст главы {chapter_id} пуст. Пропуск.")
                     continue
 
-                update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Поиск упоминаний...")
+                # Разведка
+                update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Разведка...")
                 recon_result = self._perform_recon(master_archive, chapter_text)
-                if not recon_result or (
-                        not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
-                    logger.info("'Разведка' не нашла релевантных персонажей. Пропуск.")
+
+                if not recon_result or (not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
                     continue
 
-                logger.info(
-                    f"Найдены ID: {recon_result.mentioned_existing_character_ids}, Новые имена: {recon_result.newly_discovered_names}")
-
-                relevant_chars = self._filter_archive_by_ids(master_archive,
-                                                             recon_result.mentioned_existing_character_ids)
-                relevant_characters_json = json.dumps([char.model_dump(mode='json') for char in relevant_chars],
-                                                      ensure_ascii=False, indent=2)
+                # Генерация патчей
+                relevant_chars = self._filter_archive_by_ids(master_archive, recon_result.mentioned_existing_character_ids)
+                relevant_characters_json = json.dumps([char.model_dump(mode='json') for char in relevant_chars], ensure_ascii=False, indent=2)
 
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Глубокий анализ...")
-
                 patch_list = self._perform_operation(
-                    relevant_characters_json=relevant_characters_json,
-                    newly_discovered_names=recon_result.newly_discovered_names,
-                    chapter_text=chapter_text,
-                    vol_num=vol_num,
-                    chap_num=chap_num
+                    relevant_characters_json,
+                    recon_result.newly_discovered_names,
+                    chapter_text, vol_num, chap_num
                 )
-                if not patch_list or not patch_list.patches:
-                    logger.warning("LLM не вернула патчей. Считаем, что в главе не было значимых изменений.")
-                    master_archive = self._add_empty_mentions(master_archive,
-                                                              recon_result.mentioned_existing_character_ids, chapter_id)
+
+                if patch_list and patch_list.patches:
+                    master_archive = self._apply_patch(master_archive, patch_list, vol_num, chap_num, chapter_text)
                 else:
-                    update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Обновление архива...")
-                    master_archive = self._apply_patch(master_archive, patch_list, vol_num, chap_num)
+                    master_archive = self._add_empty_mentions(master_archive, recon_result.mentioned_existing_character_ids, chapter_id)
 
                 master_archive.save(context.get_character_archive_path())
-                logger.info(f"Архив обновлен. Текущее кол-во персонажей: {len(master_archive.characters)}")
 
-            stage = "Завершение"
-            update_progress(1.0, stage, f"Анализ завершен. Всего в архиве: {len(master_archive.characters)}.")
+            update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")
 
         except Exception as e:
-            error_msg = f"Критическая ошибка в пайплайне анализа персонажей: {e}"
-            update_progress(1.0, "Ошибка", error_msg)
-            logger.error(error_msg, exc_info=True)
+            logger.error(f"Ошибка пайплайна: {e}", exc_info=True)
             raise
+
+    # Валидаторы
+
+    def _is_role_name(self, name: str) -> bool:
+        """Проверяет, содержит ли имя слово из черного списка ролей."""
+        if not name: return False
+        name_lower = name.lower()
+        for role in self.GENERIC_ROLES_BLACKLIST:
+            if role in name_lower:
+                return True
+        return False
+
+    def _is_dangerous_rename(self, current_name: str, new_name: str) -> bool:
+        """
+        Блокирует переименование Нормального Имени в Роль.
+        Пример: "Андрей" (ОК) -> "Доктор" (РОЛЬ) => БЛОК.
+        Пример: "Деревенщина 1" (РОЛЬ) -> "Андрей" (ОК) => РАЗРЕШЕНО.
+        """
+        current_is_role = self._is_role_name(current_name)
+        new_is_role = self._is_role_name(new_name)
+
+        if not current_is_role and new_is_role:
+            return True
+
+        return False
 
     def _perform_recon(self, archive: CharacterArchive, chapter_text: str) -> Optional[CharacterReconResult]:
         fast_llm = self.model_manager.get_llm_service('character_analyzer')
-        logger.info("Шаг 1: 'Разведка' - сопоставление с известными и поиск новых...")
-        known_chars_for_recon = [
-            {"id": str(char.id), "name": char.name, "aliases": char.aliases}
-            for char in archive.characters
-        ]
-        known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False, indent=2) if known_chars_for_recon else "[]"
+        known_chars_for_recon = [{"id": str(char.id), "name": char.name} for char in archive.characters]
+        known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False) if known_chars_for_recon else "[]"
+        prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json)
+        return fast_llm.call_for_pydantic(CharacterReconResult, prompt)
 
-        recon_prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json)
-        return fast_llm.call_for_pydantic(CharacterReconResult, recon_prompt)
-
-    def _perform_operation(
-            self,
-            relevant_characters_json: str,
-            newly_discovered_names: List[str],
-            chapter_text: str,
-            vol_num: int,
-            chap_num: int
-    ) -> Optional[CharacterPatchList]:
+    def _perform_operation(self, relevant_chars_json: str, new_names: List[str], text: str, vol: int, chap: int) -> Optional[CharacterPatchList]:
         powerful_llm = self.model_manager.get_llm_service('scenario_generator')
-        logger.info("Шаг 2: 'Операция' - запрос патча с изменениями...")
-        patch_prompt = prompts.format_character_patch_prompt(
-            relevant_chars_json=relevant_characters_json,
-            newly_discovered_names=newly_discovered_names,
-            chapter_text=chapter_text,
-            volume=vol_num,
-            chapter=chap_num
-        )
+        prompt = prompts.format_character_patch_prompt(relevant_chars_json, new_names, text, vol, chap)
+        return powerful_llm.call_for_pydantic(CharacterPatchList, prompt)
 
-        return powerful_llm.call_for_pydantic(CharacterPatchList, patch_prompt)
+    def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int, chap: int, chapter_text: str) -> CharacterArchive:
+        """Применяет патчи с проверкой на коллизии имен (но без удаления мусора)."""
+        chapter_id = f"vol_{vol}_chap_{chap}"
+        role_weights = {"background": 0, "minor": 1, "major": 2, "protagonist": 3}
+        char_map = {char.id: char for char in archive.characters}
+
+        for patch in patch_list.patches:
+            # EXISTING CHARACTER
+            if patch.id and patch.id in char_map:
+                char = char_map[patch.id]
+                if patch.name and patch.name != char.name:
+                    if self._is_dangerous_rename(char.name, patch.name):
+                        logger.warning(f"🛡️ BLOCKED DOWNGRADE RENAME: {char.name} -> {patch.name}")
+                        # Плохое имя в алиасы, вдруг это титул
+                        if patch.name not in char.aliases:
+                            char.aliases.append(patch.name)
+                    else:
+                        logger.info(f"♻️ RENAME APPROVED: {char.name} -> {patch.name}")
+                        if char.name not in char.aliases:
+                            char.aliases.append(char.name)
+                        char.name = patch.name
+
+                if patch.aliases:
+                    current = set(char.aliases)
+                    new = set(patch.aliases)
+                    char.aliases = sorted(list(current.union(new)))
+                    if char.name in char.aliases:
+                        char.aliases.remove(char.name)
+
+                update_data = patch.model_dump(exclude_unset=True, exclude={
+                    'id', 'name', 'aliases', 'chapter_mentions',
+                    'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning'
+                })
+                if update_data:
+                    char = char.model_copy(update=update_data)
+                    char_map[patch.id] = char
+
+                if patch.role_tier:
+                    old_w = role_weights.get(char.role_tier, 0)
+                    new_w = role_weights.get(patch.role_tier, 0)
+                    if new_w > old_w:
+                        char.role_tier = patch.role_tier
+
+                if patch.timeline_voice_update:
+                    char.voice_timeline[chapter_id] = patch.timeline_voice_update
+                if patch.timeline_visual_update:
+                    char.visual_timeline[chapter_id] = patch.timeline_visual_update
+                if patch.chapter_mentions:
+                    char.chapter_mentions.update(patch.chapter_mentions)
+
+            # NEW CHARACTER
+            elif patch.id is None and patch.name:
+                new_char = Character(
+                    name=patch.name,
+                    description=patch.description or "Новый персонаж.",
+                    spoiler_free_description=patch.spoiler_free_description or "Новый персонаж.",
+                    aliases=patch.aliases or [],
+                    role_tier=patch.role_tier or "minor",
+                    chapter_mentions=patch.chapter_mentions or {}
+                )
+
+                if patch.timeline_voice_update:
+                    new_char.voice_timeline[chapter_id] = patch.timeline_voice_update
+                if patch.timeline_visual_update:
+                    new_char.visual_timeline[chapter_id] = patch.timeline_visual_update
+
+                char_map[new_char.id] = new_char
+                logger.info(f"✨ NEW CHAR ADDED: {patch.name}")
+
+        archive.characters = list(char_map.values())
+        return archive
 
     def _is_chapter_processed(self, archive: CharacterArchive, chapter_id: str) -> bool:
         for char in archive.characters:
@@ -156,51 +222,8 @@ class CharacterAnalysisPipeline:
         id_set = set(ids)
         return [char for char in archive.characters if char.id in id_set]
 
-    def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int,
-                     chap: int) -> CharacterArchive:
-        logger.info(f"Применение {len(patch_list.patches)} патчей к архиву...")
-        char_map = {char.id: char for char in archive.characters}
-        for patch in patch_list.patches:
-            if patch.id and patch.id in char_map:
-                existing_char = char_map[patch.id]
-                update_data = patch.model_dump(exclude_unset=True, exclude={'id'})
-
-                if 'aliases' in update_data and update_data['aliases']:
-                    existing_aliases = set(existing_char.aliases)
-                    new_aliases = set(update_data['aliases'])
-                    update_data['aliases'] = sorted(list(existing_aliases.union(new_aliases)))
-
-                if 'chapter_mentions' in update_data and update_data['chapter_mentions']:
-                    existing_char.chapter_mentions.update(update_data['chapter_mentions'])
-                    del update_data['chapter_mentions']
-
-                if update_data:
-                    updated_char = existing_char.model_copy(update=update_data)
-                    char_map[patch.id] = updated_char
-                else:
-                    char_map[patch.id] = existing_char
-
-
-            elif patch.id is None and patch.name:
-                new_char = Character(
-                    name=patch.name,
-                    description=patch.description or "Описание не предоставлено.",
-                    spoiler_free_description=patch.spoiler_free_description or "Описание не предоставлено.",
-                    aliases=patch.aliases or [],
-                    chapter_mentions=patch.chapter_mentions or {}
-                )
-                char_map[new_char.id] = new_char
-                logger.info(f"Обнаружен и добавлен новый персонаж: {patch.name} (ID: {new_char.id})")
-            else:
-                logger.warning(f"Пропущен некорректный патч: {patch.model_dump_json()}")
-
-        archive.characters = list(char_map.values())
-        return archive
-
-    def _add_empty_mentions(self, archive: CharacterArchive, ids_to_mention: List[UUID],
-                            chapter_id: str) -> CharacterArchive:
+    def _add_empty_mentions(self, archive: CharacterArchive, ids: List[UUID], chapter_id: str) -> CharacterArchive:
         for char in archive.characters:
-            if char.id in ids_to_mention:
-                if chapter_id not in char.chapter_mentions:
-                    char.chapter_mentions[chapter_id] = "Персонаж упоминается в главе, но без значимых действий."
+            if char.id in ids and chapter_id not in char.chapter_mentions:
+                char.chapter_mentions[chapter_id] = "Упоминается мельком."
         return archive
