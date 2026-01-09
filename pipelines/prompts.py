@@ -93,7 +93,8 @@ def format_summary_generation_prompt(
 
 
 # --- ПРОМПТЫ ДЛЯ АНАЛИЗА ПЕРСОНАЖЕЙ ---
-def format_character_recon_prompt(chapter_text: str, known_characters_json: str, chapter_summary: Optional[str] = None) -> str:
+def format_character_recon_prompt(chapter_text: str, known_characters_json: str,
+                                  chapter_summary: Optional[str] = None) -> str:
     """
     Промпт для 'умной разведки'.
     Теперь включает контекст саммари для устранения неоднозначностей.
@@ -195,8 +196,12 @@ def format_character_patch_prompt(
   - **БЕЗОПАСНОСТЬ:** Заменяй чувствительные роли на визуальные синонимы (Slave -> Servant).
   - `image_prompt`: Напиши готовый промпт на АНГЛИЙСКОМ (например: "medieval knight, shining armor, blood on face, holding sword").
 
-- **role_tier:** Если `entity_type` == 'object' или 'animal', ставь `background`.
-
+- **role_tier:** Оцени важность персонажа строго одним из слов:
+  - 'protagonist' (Главный герой)
+  - 'major' (Значимый персонаж сюжета)
+  - 'minor' (Второстепенный, эпизодический)
+  - 'background' (Массовка, фоновый)
+  
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
 
