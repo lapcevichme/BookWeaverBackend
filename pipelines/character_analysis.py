@@ -7,7 +7,7 @@ from typing import List, Optional, Callable
 from uuid import UUID
 
 from core.project_context import ProjectContext
-from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList
+from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList, CharacterType
 from services.model_manager import ModelManager
 from pipelines import prompts
 
@@ -159,6 +159,12 @@ class CharacterAnalysisPipeline:
         char_map = {char.id: char for char in archive.characters}
 
         for patch in patch_list.patches:
+            # Даже если промпт просил игнорировать, если модель все же прислала OBJECT - мы его не сохраняем.
+            # TODO: рассмотреть ситуацию когда объекты важны, в NGE есть такие
+            if patch.entity_type == CharacterType.OBJECT:
+                logger.info(f"🗑️ SKIPPED OBJECT: {patch.name}")
+                continue
+
             # EXISTING CHARACTER
             if patch.id and patch.id in char_map:
                 char = char_map[patch.id]
@@ -174,6 +180,9 @@ class CharacterAnalysisPipeline:
                             char.aliases.append(char.name)
                         char.name = patch.name
 
+                if patch.entity_type and patch.entity_type != char.entity_type:
+                     char.entity_type = patch.entity_type
+
                 if patch.aliases:
                     current = set(char.aliases)
                     new = set(patch.aliases)
@@ -183,7 +192,7 @@ class CharacterAnalysisPipeline:
 
                 update_data = patch.model_dump(exclude_unset=True, exclude={
                     'id', 'name', 'aliases', 'chapter_mentions',
-                    'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning'
+                    'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning', 'entity_type'
                 })
                 if update_data:
                     char = char.model_copy(update=update_data)
@@ -206,6 +215,7 @@ class CharacterAnalysisPipeline:
             elif patch.id is None and patch.name:
                 new_char = Character(
                     name=patch.name,
+                    entity_type=patch.entity_type or CharacterType.PERSON,
                     description=patch.description or "Новый персонаж.",
                     spoiler_free_description=patch.spoiler_free_description or "Новый персонаж.",
                     aliases=patch.aliases or [],
@@ -220,7 +230,7 @@ class CharacterAnalysisPipeline:
                     new_char.visual_timeline[chapter_id] = patch.timeline_visual_update
 
                 char_map[new_char.id] = new_char
-                logger.info(f"✨ NEW CHAR ADDED: {patch.name}")
+                logger.info(f"✨ NEW CHAR ADDED: {patch.name} ({new_char.entity_type.value})")
 
         archive.characters = list(char_map.values())
         return archive

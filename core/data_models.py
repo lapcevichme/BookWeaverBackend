@@ -6,10 +6,20 @@ import json
 from pathlib import Path
 from typing import List, Optional, Dict, Literal
 from uuid import UUID, uuid4
+from enum import Enum
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
+
 # TODO - наверное на файлы разбить все модели, их слишком много. Отдельно конфиги, отдельно пайпы
+
+# Enums
+
+class CharacterType(str, Enum):
+    PERSON = "person"
+    ANIMAL = "animal"
+    OBJECT = "object"
+    UNKNOWN = "unknown"
 
 
 # Timeline
@@ -59,7 +69,10 @@ class CharacterPatch(BaseModel):
     Поддерживает логику переименования и обновления таймлайнов.
     """
     id: Optional[UUID] = Field(None, description="ID существующего персонажа. Если null - создается новый.")
-
+    entity_type: Optional[CharacterType] = Field(
+        None,
+        description="Тип сущности (person, animal, object). Обязательно для новых."
+    )
     naming_reasoning: Optional[str] = Field(
         None,
         description="Объяснение выбора имени. Обязательно, если меняется имя."
@@ -86,9 +99,13 @@ class CharacterPatch(BaseModel):
     )
 
     @model_validator(mode='before')
-    def check_name_for_new_character(cls, values):
+    def validate_and_fix_data(cls, values):
+        if values.get('entity_type') and isinstance(values.get('entity_type'), str):
+            values['entity_type'] = values['entity_type'].lower()
+
         if values.get('id') is None and not values.get('name'):
             raise ValueError("Поле 'name' является обязательным для новых персонажей.")
+
         return values
 
 
@@ -217,6 +234,10 @@ class Character(BaseModel):
     """
     id: UUID = Field(default_factory=uuid4, description="Уникальный ID.")
     name: str = Field(description="Каноническое имя (как персонажа чаще всего называют в диалогах).")
+    entity_type: CharacterType = Field(
+        default=CharacterType.PERSON,
+        description="Тип сущности: person, animal, object."
+    )
     aliases: List[str] = Field(default_factory=list, description="Список альтернативных имен или титулов.")
     gender: Optional[str] = Field(None, description="male/female/other")
     # TODO Ссылка на другое я - на бущее!
