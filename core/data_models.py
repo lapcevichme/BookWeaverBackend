@@ -1,5 +1,6 @@
 """
 Центральный модуль, определяющий все основные структуры данных проекта.
+Версия 2.1: Удален легаси AmbientTransition, добавлена поддержка Sound Design.
 """
 from __future__ import annotations
 import json
@@ -11,9 +12,7 @@ from enum import Enum
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 
-# TODO - наверное на файлы разбить все модели, их слишком много. Отдельно конфиги, отдельно пайпы
-
-# Enums
+# --- Enums ---
 
 class CharacterType(str, Enum):
     PERSON = "person"
@@ -22,7 +21,7 @@ class CharacterType(str, Enum):
     UNKNOWN = "unknown"
 
 
-# Timeline
+# --- Timeline Models ---
 
 class CharacterVoiceState(BaseModel):
     """
@@ -46,12 +45,11 @@ class CharacterVisualState(BaseModel):
                                                 description="Путь к сгенерированному референсу (заполняется системой).")
 
 
-# Ответы от LLM
+# --- Analysis & Patching Models ---
 
 class CharacterReconResult(BaseModel):
     """
-    Модель для 'умной разведки'. Разделяет найденных персонажей на
-    существующих (по ID) и абсолютно новых (по именам).
+    Модель для 'умной разведки'.
     """
     mentioned_existing_character_ids: List[UUID] = Field(
         default_factory=list,
@@ -66,7 +64,6 @@ class CharacterReconResult(BaseModel):
 class CharacterPatch(BaseModel):
     """
     Патч изменений для персонажа.
-    Поддерживает логику переименования и обновления таймлайнов.
     """
     id: Optional[UUID] = Field(None, description="ID существующего персонажа. Если null - создается новый.")
     entity_type: Optional[CharacterType] = Field(
@@ -78,17 +75,12 @@ class CharacterPatch(BaseModel):
         description="Объяснение выбора имени. Обязательно, если меняется имя."
     )
     name: Optional[str] = Field(None, description="Каноническое (удобное) имя.")
-
     role_tier: Optional[str] = None
-
     description: Optional[str] = None
     spoiler_free_description: Optional[str] = None
     aliases: Optional[List[str]] = None
     gender: Optional[str] = None
-
     chapter_mentions: Optional[Dict[str, str]] = None
-
-    # Новые состояния (заполняются ТОЛЬКО при изменениях)
     timeline_voice_update: Optional[CharacterVoiceState] = Field(
         None,
         description="Заполнить, если изменился возраст или голос."
@@ -102,20 +94,19 @@ class CharacterPatch(BaseModel):
     def validate_and_fix_data(cls, values):
         if values.get('entity_type') and isinstance(values.get('entity_type'), str):
             values['entity_type'] = values['entity_type'].lower()
-
         if values.get('id') is None and not values.get('name'):
             raise ValueError("Поле 'name' является обязательным для новых персонажей.")
-
         return values
 
 
 class CharacterPatchList(BaseModel):
-    """Контейнер для списка патчей от LLM."""
     patches: List[CharacterPatch]
 
 
+# --- Scenario Generation Models (Intermediate) ---
+
 class RawScenarioEntry(BaseModel):
-    """'Сырая' запись сценария, как ее возвращает LLM."""
+    """'Сырая' запись сценария (парсинг ответа)."""
     id: UUID = Field(default_factory=uuid4)
     type: Literal["dialogue", "narration"]
     speaker: str
@@ -127,15 +118,20 @@ class RawScenario(BaseModel):
     scenario: List[RawScenarioEntry]
 
 
-class AmbientTransition(BaseModel):
-    """Представляет одну точку смены эмбиента в тексте."""
-    entry_id: UUID = Field(description="ID записи из сценария, с которой начинается новый эмбиент.")
-    ambientSoundId: str = Field(description="ID нового звука из библиотеки эмбиента.")
+# --- Sound Design Models (NEW) ---
+
+class SoundDesignItem(BaseModel):
+    """
+    Результат работы звукорежиссера для одной записи сценария.
+    """
+    entry_id: str = Field(description="ID записи сценария.")
+    ambient: Optional[str] = Field(None, description="ID фонового звука или 'none'.")
+    sfx: Optional[str] = Field(None, description="ID точечного звукового эффекта.")
 
 
-class AmbientTransitionList(BaseModel):
-    """Контейнер для списка смен эмбиента."""
-    transitions: List[AmbientTransition]
+class SoundDesignResult(BaseModel):
+    """Контейнер для списка звуковых решений."""
+    design: List[SoundDesignItem]
 
 
 class EmotionMap(BaseModel):
@@ -143,7 +139,7 @@ class EmotionMap(BaseModel):
     emotions: Dict[UUID, str]
 
 
-# --- Модели пересказов ---
+# --- Summary Models ---
 
 class RawChapterSummary(BaseModel):
     """'Сырой' пересказ главы, как его возвращает LLM."""
@@ -186,16 +182,12 @@ class ChapterSummaryArchive(BaseModel):
         if not path.exists():
             return cls()
         data = json.loads(path.read_text("utf-8"))
-        summaries_data = data.get("summaries", {})
-        volume_data = data.get("volume_summaries", {})
-
-        summaries_obj = {k: ChapterSummary(**v) for k, v in summaries_data.items()}
-        volume_obj = {k: VolumeSummary(**v) for k, v in volume_data.items()}
-
+        summaries_obj = {k: ChapterSummary(**v) for k, v in data.get("summaries", {}).items()}
+        volume_obj = {k: VolumeSummary(**v) for k, v in data.get("volume_summaries", {}).items()}
         return cls(summaries=summaries_obj, volume_summaries=volume_obj)
 
 
-# --- Модели Сценария ---
+# --- Final Scenario Models ---
 
 class ScenarioEntry(BaseModel):
     """Представляет одну запись (строку) в финальном сценарии."""
@@ -203,8 +195,9 @@ class ScenarioEntry(BaseModel):
     type: Literal["dialogue", "narration"]
     text: str
     speaker: str
-    emotion: Optional[str] = None
+    emotion: Optional[str] = "neutral"
     ambient: str = "none"
+    sfx: Optional[str] = Field(None, description="ID звукового эффекта.")
     audio_file: Optional[str] = None
 
 
@@ -226,7 +219,7 @@ class Scenario(BaseModel):
         return cls(entries=json.loads(path.read_text("utf-8")))
 
 
-# --- Модели Персонажей ---
+# --- Character Archive Models ---
 
 class Character(BaseModel):
     """
@@ -270,7 +263,7 @@ class CharacterArchive(BaseModel):
         return cls(characters=data)
 
 
-# --- Манифест ---
+# --- Manifest Models ---
 
 class ManifestMeta(BaseModel):
     """Метаданные книги."""
@@ -294,7 +287,6 @@ class ManifestChapterEntry(BaseModel):
     chap: int
     status: str = "draft"
     path: Optional[str] = None
-
     id: Optional[str] = None
     src_dir: Optional[str] = None
 
@@ -306,10 +298,8 @@ class ManifestChapterEntry(BaseModel):
         """
         canonical_id = f"vol_{self.vol}_chap_{self.chap}"
         self.id = canonical_id
-
         if not self.src_dir:
             self.src_dir = canonical_id
-
         return self
 
 
@@ -346,13 +336,15 @@ class BookManifest(BaseModel):
             raise
 
 
-# Display Helpers
+# --- Display/Prompt Helpers ---
 
 class LlmRawScenarioEntry(BaseModel):
+    """Используется ТОЛЬКО для генерации схемы в промпте (без UUID)."""
     type: Literal["dialogue", "narration"]
     speaker: str
     text: str
 
 
 class LlmRawScenario(BaseModel):
+    """Используется ТОЛЬКО для генерации схемы в промпте."""
     scenario: List[LlmRawScenarioEntry]

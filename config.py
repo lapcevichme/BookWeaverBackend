@@ -24,9 +24,11 @@ AMBIENT_DIR = INPUT_DIR / "ambient"
 BOOKS_DIR_NAME = "books"
 
 # Файлы-библиотеки и словари
+# TODO: input это довольно странное место для static файлов, нужно будет поменять пути. Просто static нужно сделать и не париться
 PRONUNCIATION_DICT_FILE = INPUT_DIR / "pronunciation_dictionary.json"
 AMBIENT_LIBRARY_FILE = INPUT_DIR / "ambient_library.json"
 EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_library.json"
+SFX_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "sfx_library.json"
 
 # --- Настройки моделей и API ---
 # Имена моделей для LLM

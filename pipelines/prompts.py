@@ -9,7 +9,6 @@ from core.data_models import (
     CharacterArchive,
     CharacterReconResult,
     CharacterPatchList,
-    AmbientTransitionList,
     EmotionMap, RawChapterSummary, ChapterSummary, LlmRawScenario
 )
 from core.project_context import ProjectContext
@@ -286,66 +285,110 @@ def format_scenario_generation_prompt(
 """
 
 
-def format_ambient_extraction_prompt(
-        raw_scenario_json: str, ambient_library: List[Dict]
+def format_sound_design_prompt(
+        scenario_json: str,
+        ambient_menu: str,
+        sfx_menu: str,
+        schema_description: str
 ) -> str:
     """
-    Формирует промпт для извлечения точек смены эмбиента.
-    Принимает готовый сценарий в JSON и работает с UUID.
+    Формирует промпт для звукового дизайна (Ambient + SFX).
+    Принимает уже сериализованные JSON-строки меню и сценария,
+    а также описание схемы валидации.
     """
-    schema_description = generate_human_schema(AmbientTransitionList)
-    library_str = json.dumps(ambient_library, ensure_ascii=False, indent=2)
     return f"""
-ТЫ — ПРОДВИНУТЫЙ ЗВУКОРЕЖИССЕР.
-Твоя задача: изучить готовый сценарий и определить, с какой строки (entry) должна начаться смена атмосферы.
+ТЫ — ЗВУКОРЕЖИССЕР АУДИОКНИГИ.
+Твоя задача — выбрать подходящие звуки из ПРЕДОСТАВЛЕННОГО МЕНЮ.
+
+ВХОДНЫЕ ДАННЫЕ:
+1. Сценарий (фрагменты текста).
+2. Меню Ambient (фоновые петли).
+3. Меню SFX (короткие звуки).
 
 ИНСТРУКЦИЯ:
-1. Прочитай СЦЕНАРИЙ. Каждая запись в нем имеет уникальный `id`.
-2. Проанализируй БИБЛИОТЕКУ ЭМБИЕНТА.
-3. Определи моменты, где меняется атмосфера.
-4. В ответе укажи `entry_id` той записи, с которой должен начаться новый звук.
-5. Если атмосфера в главе не меняется, верни ПУСТОЙ массив `transitions`.
+Для каждой записи сценария (`entry_id`) определи:
+- `ambient`: ID фонового звука. Если сцена изменилась — выбери новый. Если тишина — "none".
+- `sfx`: ID короткого звука. ВНИМАНИЕ: Выбирай ТОЛЬКО если в тексте есть ЯВНОЕ действие (удар, крик, дверь), совпадающее со звуком из МЕНЮ SFX.
+
+!!! ВАЖНО: ПРИНЦИП БЕЛОГО СПИСКА !!!
+- Ты НЕ имеешь права придумывать свои ID.
+- Если в тексте "разбилось стекло", но в МЕНЮ SFX нет звука стекла — оставь поле `sfx` пустым (null). НЕ выдумывай "glass_break".
+- Используй только ID, перечисленные ниже.
+
+МЕНЮ AMBIENT (ДОСТУПНЫЕ): {ambient_menu}
+МЕНЮ SFX (ДОСТУПНЫЕ): {sfx_menu}
+
+СЦЕНАРИЙ:
+{scenario_json}
 
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
-
-БИБЛИОТЕКА ЭМБИЕНТА:
-{library_str}
-
-СЦЕНАРИЙ (ВХОДНЫЕ ДАННЫЕ):
-{raw_scenario_json}
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):
 """
 
 
 def format_emotion_analysis_prompt(
-        replicas: List[Dict], character_profiles: Dict, emotion_list: List[str]
+        replicas: List[Dict],
+        character_profiles: Dict,
+        character_emotions: List[str],
+        narrator_styles: List[str]
 ) -> str:
     """
-    Формирует промпт для пакетного анализа эмоций.
-    Работает с UUID в качестве `id` реплик.
+    Формирует промпт для пакетного анализа эмоций с разделением на Narrator/Character.
     """
     schema_description = generate_human_schema(EmotionMap)
+
     character_profiles_json = json.dumps(character_profiles, ensure_ascii=False, indent=2)
     replicas_scenario_json = json.dumps(replicas, ensure_ascii=False, indent=2)
-    emotion_list_json = json.dumps(emotion_list, ensure_ascii=False)
+
+    chars_tags_json = json.dumps(character_emotions, ensure_ascii=False)
+    narrator_tags_json = json.dumps(narrator_styles, ensure_ascii=False)
+
     return f"""
-ТЫ — ГЛАВНЫЙ РЕЖИССЕР АУДИОТЕАТРА.
-Твоя задача: для КАЖДОЙ реплики из сценария ВЫБЕРИ ОДНУ эмоцию ИЗ СПИСКА.
-В твоем ответе ключом в словаре `emotions` должен быть `id` реплики из входных данных.
+ТЫ — ГЛАВНЫЙ РЕЖИССЕР АУДИОКНИГИ.
+Твоя задача: назначить тег стиля/эмоции (`emotion`) для КАЖДОЙ строки сценария.
 
-ФОРМАТ ОТВЕТА (JSON):
-{schema_description}
+!!! ВАЖНОЕ ПРАВИЛО РАЗДЕЛЕНИЯ !!!
 
-СПИСОК ДОСТУПНЫХ ЭМОЦИЙ:
-{emotion_list_json}
+1. ЕСЛИ speaker == "Рассказчик":
+   - Ты выбираешь тег ИСКЛЮЧИТЕЛЬНО из списка `NARRATOR STYLES`.
+   - Анализируй атмосферу сцены: спокойная, напряженная (suspense), быстрая (action), грустная.
+   - Не используй эмоции типа "плачет" или "смеется" для рассказчика, если это не указано явно.
 
+2. ЕСЛИ speaker — Имя Персонажа:
+   - Ты выбираешь тег ИСКЛЮЧИТЕЛЬНО из списка `CHARACTER EMOTIONS`.
+   - Анализируй смысл реплики и реакцию персонажа.
+
+=== СПИСКИ ДОСТУПНЫХ ТЕГОВ ===
+[NARRATOR STYLES]:
+{narrator_tags_json}
+
+[CHARACTER EMOTIONS]:
+{chars_tags_json}
+
+=== КОНТЕКСТ ===
 ОПИСАНИЯ ПЕРСОНАЖЕЙ:
 {character_profiles_json}
 
-СЦЕНАРИЙ РЕПЛИК (ВХОДНЫЕ ДАННЫЕ):
+=== ЗАДАНИЕ ===
+СЦЕНАРИЙ (ВХОДНЫЕ ДАННЫЕ):
 {replicas_scenario_json}
+
+ФОРМАТ ОТВЕТА (JSON):
+Ты ОБЯЗАН вернуть объект с единственным полем "emotions".
+Пример структуры:
+{{
+  "emotions": {{
+    "uuid-1": "angry",
+    "uuid-2": "neutral",
+    "uuid-3": "whisper"
+  }}
+}}
+
+Схема валидации:
+{schema_description}
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):
 """
+
