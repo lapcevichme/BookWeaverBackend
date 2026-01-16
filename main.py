@@ -20,6 +20,7 @@ from pipelines.scenario_generation import ScenarioGenerationPipeline
 from pipelines.summary_generation import SummaryGenerationPipeline
 from pipelines.tts_pipeline import TTSPipeline
 from pipelines.vc_pipeline import VCPipeline
+from pipelines.image_generation_pipeline import (ImageGenerationPipeline)
 
 from utils.book_converter import BookConverter
 from utils.exporter import BookExporter
@@ -44,13 +45,11 @@ class Application:
         self.summary_pipeline = SummaryGenerationPipeline(self.model_manager)
         self.tts_pipeline = TTSPipeline(self.model_manager)
         self.vc_pipeline = VCPipeline(self.model_manager)
+        self.image_pipeline = ImageGenerationPipeline()
+
         logger.info("✅ Пайплайны готовы к работе.")
 
     def import_book(self, file_path: Path) -> str:
-        """
-        Импортирует книгу из файла (EPUB/TXT), создает структуру проекта.
-        Возвращает имя созданной папки (book_name).
-        """
         logger.info(f"📚 Запуск импорта книги: {file_path}")
         converter = BookConverter(file_path)
         converter.run()
@@ -59,7 +58,8 @@ class Application:
     def run_full_cycle(self, book_name: str,
                        skip_summary: bool = False,
                        skip_chars: bool = False,
-                       skip_scenario: bool = False):
+                       skip_scenario: bool = False,
+                       generate_images: bool = False):
         """
         Запускает последовательную генерацию: Саммари -> Персонажи -> Сценарии.
         """
@@ -75,6 +75,11 @@ class Application:
         if not skip_chars:
             logger.info("\n=== ЭТАП 2: АНАЛИЗ ПЕРСОНАЖЕЙ ===")
             self.character_pipeline.run(book_name)
+
+        # 2.5: Иллюстрации (Опционально)
+        if generate_images:
+            logger.info("\n=== ЭТАП 2.5: ГЕНЕРАЦИЯ ИЛЛЮСТРАЦИЙ (ComfyUI) ===")
+            self.image_pipeline.run(ctx_book)
 
         # 3: Сценарии
         if not skip_scenario:
@@ -93,9 +98,6 @@ class Application:
         logger.info(f"\n✨ Полный цикл для '{book_name}' завершен!")
 
     def export_book(self, book_name: str) -> Optional[Path]:
-        """
-        Собирает готовый проект в .bw архив.
-        """
         logger.info(f"📦 Запуск экспорта для: {book_name}")
         exporter = BookExporter(book_name)
         return exporter.export()

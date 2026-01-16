@@ -51,5 +51,23 @@ SUMMARY_LLM_TEMPERATURE = 0.5
 VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
+# --- Настройки ComfyUI ---
+COMFY_SERVER_ADDRESS = os.environ.get("COMFY_SERVER_ADDRESS", "127.0.0.1:8188")
+COMFY_WORKFLOW_FILE = INPUT_DIR / "comfy_workflow.json"
+
+# Эти параметры используются как fallback, но если в маппинге ниже
+# ключи закомментированы, то размеры берутся прямо из JSON файла.
+COMFY_DEFAULT_WIDTH = 512
+COMFY_DEFAULT_HEIGHT = 768
+
+# === МАППИНГ НОД (ГИБКАЯ НАСТРОЙКА) ===
+# Укажите ID ноды, если хотите перезаписывать её значение из Python.
+COMFY_NODE_MAPPING = {
+    "positive_prompt_node_id": "3",
+    # "negative_prompt_node_id": "4",
+    # "ksampler_node_id": "6",
+    # "empty_latent_node_id": "5",
+}
+
 for path in [OUTPUT_DIR, EXPORT_DIR, TEMP_DIR]:
     path.mkdir(parents=True, exist_ok=True)
