@@ -25,6 +25,7 @@ class ProjectContext:
         self.summary_archive_file = self.book_output_dir / "chapter_summaries.json"
         self.manifest_file = self.book_output_dir / "manifest.json"
         self.cover_file = self.book_output_dir / "cover.jpg"
+        self.images_dir = self.book_output_dir / "images"
 
         # --- Пути уровня главы (определяются, только если переданы номера) ---
         if volume_num is not None and chapter_num is not None:

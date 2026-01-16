@@ -22,13 +22,13 @@ class CharacterAnalysisPipeline:
         # Не удаляем персонажей с такими именами, просто запрещаем переименовывать нормальные имена в эти.
         # TODO: как-то в промптах дать модели знать, что нельзя так переименовывать - но вот галлюцинации хз как обойти.
         self.GENERIC_ROLES_BLACKLIST = {
-            "доктор", "врач", "лекарь", "целитель",
-            "служанка", "горничная", "фрейлина", "слуга",
-            "стражник", "солдат", "офицер", "генерал",
-            "евнух", "император", "супруга", "наложница",
-            "повар", "кучер", "бандит", "вор",
-            "деревенщина", "крестьянин", "житель",
-            "мальчик", "девочка", "старик", "старуха", "мужчина", "женщина"
+            # "доктор", "врач", "лекарь", "целитель",
+            # "служанка", "горничная", "фрейлина", "слуга",
+            # "стражник", "солдат", "офицер", "генерал",
+            # "евнух", "император", "супруга", "наложница",
+            # "повар", "кучер", "бандит", "вор",
+            # "деревенщина", "крестьянин", "житель",
+            # "мальчик", "девочка", "старик", "старуха", "мужчина", "женщина"
         }
 
         logger.info("✅ Пайплайн CharacterAnalysisPipeline инициализирован.")
@@ -194,6 +194,7 @@ class CharacterAnalysisPipeline:
                     'id', 'name', 'aliases', 'chapter_mentions',
                     'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning', 'entity_type'
                 })
+
                 if update_data:
                     char = char.model_copy(update=update_data)
                     char_map[patch.id] = char
@@ -221,7 +222,8 @@ class CharacterAnalysisPipeline:
                     aliases=patch.aliases or [],
                     role_tier=patch.role_tier or "minor",
                     chapter_mentions=patch.chapter_mentions or {},
-                    gender=patch.gender
+                    gender=patch.gender,
+                    visual_base=patch.visual_base or ""
                 )
 
                 if patch.timeline_voice_update:

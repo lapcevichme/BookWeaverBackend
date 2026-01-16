@@ -80,6 +80,10 @@ class CharacterPatch(BaseModel):
     spoiler_free_description: Optional[str] = None
     aliases: Optional[List[str]] = None
     gender: Optional[str] = None
+    visual_base: Optional[str] = Field(
+        None,
+        description="Базовые визуальные теги на английском (например: '1girl, red hair, green eyes, scar'). Используется как 'чертеж' для сохранения похожести."
+    )
     chapter_mentions: Optional[Dict[str, str]] = None
     timeline_voice_update: Optional[CharacterVoiceState] = Field(
         None,
@@ -239,6 +243,10 @@ class Character(BaseModel):
     spoiler_free_description: str = Field(description="Краткое описание без спойлеров.")
     description: str = Field(description="Детальное, полное описание персонажа.")
     # Таймлайны
+    visual_base: Optional[str] = Field(
+        None,
+        description="Базовые визуальные теги на английском (например: '1girl, red hair, green eyes, scar'). Используется как 'чертеж' для сохранения похожести."
+    )
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict)
     visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict)
     chapter_mentions: Dict[str, str] = Field(default_factory=dict, description="Сводка действий персонажа по главам.")

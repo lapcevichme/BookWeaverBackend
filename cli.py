@@ -46,9 +46,14 @@ class BookWeaverCLI:
         print("Опции (Enter = выполнять этап, '-' = пропустить):")
         skip_sum = input("1. Саммари? ") == '-'
         skip_char = input("2. Персонажи? ") == '-'
+
+        gen_img = False
+        if not skip_char:
+             gen_img = input("2.5. Генерировать иллюстрации (ComfyUI)? (y/n): ").lower() == 'y'
+
         skip_scen = input("3. Сценарии? ") == '-'
 
-        self.app.run_full_cycle(book_name, skip_sum, skip_char, skip_scen)
+        self.app.run_full_cycle(book_name, skip_sum, skip_char, skip_scen, gen_img)
 
     def run_export_book(self):
         print("\n--- Экспорт книги в .bw архив ---")
@@ -62,6 +67,8 @@ class BookWeaverCLI:
         else:
             print("❌ Экспорт не удался (см. логи).")
 
+    # --- Методы ручного запуска ---
+
     def run_character_analysis(self):
         book_name = input("Введите название книги (имя папки): ")
         if book_name: self.app.character_pipeline.run(book_name)
@@ -69,6 +76,18 @@ class BookWeaverCLI:
     def run_summary_generation(self):
         book_name = input("Введите название книги (имя папки): ")
         if book_name: self.app.summary_pipeline.run(ProjectContext(book_name))
+
+    def run_image_generation(self):
+        """
+        Запускает генерацию картинок.
+        """
+        book_name = input("Введите название книги (имя папки): ")
+        if book_name:
+            print("🚀 Запускаем пайплайн генерации изображений...")
+            # Привели к общему стилю: pipeline.run(ProjectContext(...))
+            ctx = ProjectContext(book_name)
+            ctx.ensure_dirs()
+            self.app.image_pipeline.run(ctx)
 
     def run_scenario_generation(self):
         context = self._get_chapter_context_from_user()
@@ -97,14 +116,14 @@ class BookWeaverCLI:
     def main_menu(self):
         while True:
             print("\n" + "=" * 60)
-            print("BOOKWEAVER CLI v2.0")
+            print("BOOKWEAVER CLI v2.1")
             print("=" * 60)
             print("📁 ПРОЕКТ:")
             print("  1. Импорт книги (из файла)")
             print("  2. Экспорт книги (в .bw)")
             print("-" * 20)
             print("🤖 АВТОПИЛОТ:")
-            print("  3. Полный цикл генерации (Саммари -> Персы -> Сценарии)")
+            print("  3. Полный цикл генерации (Саммари -> Персы -> [Img] -> Сценарии)")
             print("-" * 20)
             print("🛠 РУЧНОЕ УПРАВЛЕНИЕ:")
             print("  4. Анализ персонажей (отдельно)")
@@ -112,6 +131,7 @@ class BookWeaverCLI:
             print("  6. Генерация сценария главы (отдельно)")
             print("  7. Синтез речи (TTS) главы")
             print("  8. Voice Conversion главы")
+            print("  9. Генерация иллюстраций (ComfyUI) [BETA]")
             print("-" * 20)
             print("0. Выход")
             print("=" * 60)
@@ -126,6 +146,7 @@ class BookWeaverCLI:
             elif choice == '6': self.run_scenario_generation()
             elif choice == '7': self.run_tts_synthesis()
             elif choice == '8': self.run_voice_conversion()
+            elif choice == '9': self.run_image_generation()
             elif choice == '0': break
             else: print("Неверный ввод.")
 
