@@ -1,6 +1,8 @@
 import json
 import re
 from pathlib import Path
+from typing import List
+
 
 # TODO: рассмотреть, насколько сейчас нужен этот метод. Раньше были проблемы с TXT, но при переходе на epub и парсинг с моей стороны это, похоже, бесполезно
 def cleanup_filename(name: str) -> str:
@@ -44,3 +46,65 @@ def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
     text = text.strip()
 
     return text
+
+
+import re
+from typing import List
+
+def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> List[str]:
+    """
+    Разбивает текст на чанки, стараясь не разрывать абзацы.
+
+    Args:
+        text: Исходный текст.
+        chunk_size: Максимальный размер чанка (рекомендуется 6000-12000 для корректной работы с JSON).
+        overlap: Размер перекрытия из конца предыдущего чанка для сохранения контекста.
+    """
+    if not text:
+        return []
+
+    if len(text) <= chunk_size:
+        return [text]
+
+    # Пробуем разбиение по абзацам (двойной перенос), иначе по строкам
+    paragraphs = re.split(r'\n\s*\n', text)
+    if not paragraphs:
+        paragraphs = text.split('\n')
+
+    chunks = []
+    current_chunk = []
+    current_length = 0
+
+    for para in paragraphs:
+        para_len = len(para)
+
+        if para_len > chunk_size:
+            if current_chunk:
+                chunks.append("\n\n".join(current_chunk))
+                current_chunk = []
+                current_length = 0
+
+            # Разбиваем сверхбольшой параграф на части
+            sub_chunks = [para[i:i + chunk_size] for i in range(0, len(para), chunk_size)]
+            chunks.extend(sub_chunks)
+            continue
+
+        if current_length + para_len > chunk_size and current_chunk:
+            full_chunk_text = "\n\n".join(current_chunk)
+            chunks.append(full_chunk_text)
+
+            # Формирование перекрытия для сохранения контекста LLM
+            overlap_text = ""
+            if overlap > 0 and len(full_chunk_text) > overlap:
+                overlap_text = f"...{full_chunk_text[-overlap:]}\n--- (контекст) ---\n"
+
+            current_chunk = [overlap_text + para]
+            current_length = len(overlap_text) + para_len
+        else:
+            current_chunk.append(para)
+            current_length += para_len + 2
+
+    if current_chunk:
+        chunks.append("\n\n".join(current_chunk))
+
+    return chunks

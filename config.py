@@ -38,6 +38,9 @@ SFX_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "sfx_library.json"
 LLM_PROVIDER = "openrouter"
 FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
 POWERFUL_MODEL_NAME = os.environ.get("POWERFUL_MODEL_NAME", "gemma-3-27b-it")
+# xiaomi/mimo-v2-flash - max out 65.5K tokens
+# json где-то на 30% процентов больше делает вывод. TODO: сделать как-то автоподбор размеров или формулу на основе out токенов
+SCENARIO_CHUNK_SIZE = 40_000
 
 ANALYZER_LLM_TEMPERATURE = 0.5
 GENERATOR_LLM_TEMPERATURE = 0.5
