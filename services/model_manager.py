@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 import config
 from services.llm_service import LLMService
-from services.tts_service import TTSService
 from services.vc_service import VCService
 
 load_dotenv()
@@ -27,13 +26,14 @@ class ModelManager:
             'llm_summary_generator': Lock(),
         }
 
-    def get_tts_service(self) -> TTSService:
-        """Возвращает экземпляр TTSService."""
-        service_key = 'tts'
+    def get_tts_service(self):
+        """
+        Возвращает сервис TTS.
+        """
+        service_key = "tts_service"
         if service_key not in self._services:
-            with self._locks[service_key]:
-                if service_key not in self._services:
-                    self._services[service_key] = TTSService(model_name=config.TTS_MODEL_NAME)
+            from services.tts_service import TTSService
+            self._services[service_key] = TTSService()
         return self._services[service_key]
 
     def get_vc_service(self) -> VCService:

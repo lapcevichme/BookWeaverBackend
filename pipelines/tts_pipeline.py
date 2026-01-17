@@ -1,7 +1,6 @@
 import json
 import logging
 from typing import Callable, Optional
-import numpy as np
 import soundfile as sf
 import config
 
@@ -14,7 +13,8 @@ logger = logging.getLogger(__name__)
 
 class TTSPipeline:
     """
-    Основной пайплайн для синтеза речи для всей главы на основе файла сценария.
+    Основной пайплайн для синтеза речи для всей главы.
+    Адаптирован для работы с CosyVoice (получение WAV-байтов) + поддержка Эмоций.
     """
 
     def __init__(self, model_manager: ModelManager):
@@ -36,11 +36,13 @@ class TTSPipeline:
 
         try:
             stage = "Загрузка данных"
-            update_progress(0.02, stage, "Загрузка сервиса TTS...")
+            update_progress(0.02, stage, "Подключение к сервису TTS...")
+
             tts_service = self.model_manager.get_tts_service()
 
-            if not tts_service.tts_model:
-                raise RuntimeError("TTS модель не смогла загрузиться. Проверьте установку coqui-tts.")
+            if hasattr(tts_service, 'cosy_client'):
+                if not tts_service.cosy_client.check_health():
+                    logger.warning("⚠️ Не удается достучаться до CosyVoice API. Проверьте Docker-контейнер!")
 
             update_progress(0.04, stage, "Загрузка файла сценария...")
             scenario = context.load_scenario()
@@ -52,7 +54,6 @@ class TTSPipeline:
 
             update_progress(0.08, stage, "Загрузка архива персонажей...")
             character_archive = context.load_character_archive()
-            # Мапа Имя -> UUID
             char_name_to_id_map = {char.name: char.id for char in character_archive.characters}
 
             update_progress(0.1, stage, "Все данные успешно загружены.")
@@ -85,20 +86,19 @@ class TTSPipeline:
                     character_uuid = char_name_to_id_map.get(character_name)
                     if character_uuid:
                         voice_id = manifest.config.character_voices.get(character_uuid)
-                        if not voice_id:
-                            logger.warning(f"Голос для '{character_name}' не назначен. Использую дефолтный.")
                     else:
                         logger.warning(f"Персонаж '{character_name}' не найден в архиве.")
 
-                # Fallback
                 if not voice_id:
                     voice_id = manifest.config.default_narrator_voice
 
-                # Проверяем референс
                 speaker_wav_path = context.get_voice_path(voice_id)
                 if not speaker_wav_path.exists():
                     logger.error(f"Файл голоса '{voice_id}' не найден: {speaker_wav_path}. Пропуск.")
                     continue
+
+                # Получаем эмоцию из сценария
+                emotion_tag = getattr(entry, 'emotion', None)
 
                 # Предобработка текста
                 processed_text = text_utils.preprocess_text_for_tts(entry.text, self.pronunciation_dict)
@@ -106,33 +106,41 @@ class TTSPipeline:
                     continue
 
                 audio_duration_ms = 0
-
                 stage = "Синтез речи"
+
                 if not audio_path.exists():
-                    update_progress(progress, stage, f"[{i + 1}/{total_entries}] Синтез: {character_name}")
+                    update_progress(progress, stage,
+                                    f"[{i + 1}/{total_entries}] Синтез: {character_name} ({emotion_tag or 'neutral'})")
 
-                    synthesis_result = tts_service.synthesize(processed_text, speaker_wav_path)
+                    wav_bytes = tts_service.synthesize(
+                        text=processed_text,
+                        speaker_wav_path=speaker_wav_path,
+                        emotion=emotion_tag
+                    )
 
-                    if synthesis_result:
-                        sample_rate = tts_service.tts_model.synthesizer.output_sample_rate
-                        audio_duration_ms = int((len(synthesis_result) / sample_rate) * 1000)
+                    if wav_bytes:
+                        with open(audio_path, "wb") as f:
+                            f.write(wav_bytes)
 
-                        sf.write(str(audio_path), np.array(synthesis_result), sample_rate)
+                        try:
+                            with sf.SoundFile(str(audio_path)) as f:
+                                audio_duration_ms = int((f.frames / f.samplerate) * 1000)
+                        except Exception as e:
+                            logger.error(f"Ошибка чтения метаданных аудио {audio_filename}: {e}")
+                            audio_duration_ms = 0
                     else:
-                        logger.error(f"Сбой синтеза для реплики {entry.id}")
+                        logger.error(f"Сбой синтеза CosyVoice для реплики {entry.id}")
                         continue
                 else:
-                    logger.info(f"Файл {audio_filename} уже существует. Пропуск.")
                     try:
                         with sf.SoundFile(str(audio_path)) as f:
                             audio_duration_ms = int((f.frames / f.samplerate) * 1000)
                     except Exception:
+                        audio_duration_ms = 0
                         continue
 
-                # Whisper Alignment
                 if audio_duration_ms > 0:
                     stage = "Выравнивание (Whisper)"
-                    update_progress(progress, stage, "Генерация таймкодов...")
 
                     word_timings = tts_service.generate_word_timings(entry.text, audio_path)
 
@@ -142,16 +150,14 @@ class TTSPipeline:
                     subtitles_data.append(subtitle_entry)
                     total_duration_ms += audio_duration_ms
 
-                    # Сохраняем субтитры после каждой фразы
                     with open(subtitle_path, 'w', encoding='utf-8') as f:
                         json.dump(subtitles_data, f, ensure_ascii=False, indent=2)
 
             self._update_manifest_status(context)
-
-            update_progress(1.0, "Завершено", f"Глава {context.chapter_id} озвучена!")
+            update_progress(1.0, "Завершено", f"Глава озвучена! Длительность: {total_duration_ms / 1000:.1f} сек.")
 
         except Exception as e:
-            error_msg = f"Ошибка в TTS пайплайне: {e}"
+            error_msg = f"Критическая ошибка в TTS пайплайне: {e}"
             update_progress(1.0, "Ошибка", error_msg)
             logger.error(error_msg, exc_info=True)
             raise

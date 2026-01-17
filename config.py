@@ -60,6 +60,7 @@ COMFY_NODE_MAPPING = {
 }
 
 # TTS / VC Settings
+COSYVOICE_API_URL = os.environ.get("COSYVOICE_API_URL", "http://localhost:8188")
 VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
