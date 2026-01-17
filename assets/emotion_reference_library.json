@@ -1,0 +1,23 @@
+{
+  "narrator_styles": [
+    "neutral",
+    "mysterious",
+    "serious",
+    "slow",
+    "fast",
+    "whisper",
+    "fearful",
+    "happy"
+  ],
+  "character_emotions": [
+    "neutral",
+    "angry",
+    "sad",
+    "happy",
+    "surprised",
+    "fearful",
+    "disgusted",
+    "whisper",
+    "shouting"
+  ]
+}

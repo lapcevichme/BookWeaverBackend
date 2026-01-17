@@ -15,6 +15,8 @@ __pycache__/
 input/
 output/
 export/
+assets/ambient/*.mp3
+storage/
 was_in_root/
 /utils/mock_input/
 # Сгенерированные файлы в корне проекта
@@ -25,8 +27,6 @@ was_in_root/
 *.log
 output.txt
 .server_token
-# Исключение: НЕ игнорируем нужные .wav файлы (исходники)
-#!input/voices/*.wav
 
 # 7. Стандартные файлы ОС и редакторов
 .DS_Store
