@@ -37,7 +37,7 @@ VOICES_DIR = STORAGE_DIR / "voices"
 SERVER_PORT = int(os.environ.get("SERVER_PORT", 8080))
 
 # LLM Settings
-LLM_PROVIDER = "openrouter"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "google") # openrouter / google
 FAST_MODEL_NAME = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
 POWERFUL_MODEL_NAME = os.environ.get("POWERFUL_MODEL_NAME", "gemma-3-27b-it")
 SCENARIO_CHUNK_SIZE = 40_000
@@ -59,7 +59,7 @@ COMFY_NODE_MAPPING = {
 }
 
 # TTS
-COSYVOICE_API_URL = os.environ.get("COSYVOICE_API_URL", "http://localhost:8188")
+COSYVOICE_API_URL = os.environ.get("COSYVOICE_API_URL", "http://localhost:9233")
 
 # Ranobelib
 RANOBELIB_API_BASE_URL = "https://api.cdnlibs.org/api"

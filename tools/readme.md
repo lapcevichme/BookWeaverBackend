@@ -102,8 +102,8 @@ python voice_picker.py
 
 ```bash
 # Просто собрать список библиотек
-python dep.py
+python dependencies.py
 
 # Собрать и зафиксировать текущие версии (рекомендуется)
-python dep.py --freeze```
+python dependencies.py --freeze```
 ```
