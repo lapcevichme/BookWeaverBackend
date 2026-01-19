@@ -67,8 +67,6 @@ class BookWeaverCLI:
         else:
             print("❌ Экспорт не удался (см. логи).")
 
-    # --- Методы ручного запуска ---
-
     def run_character_analysis(self):
         book_name = input("Введите название книги (имя папки): ")
         if book_name: self.app.character_pipeline.run(book_name)
@@ -96,10 +94,6 @@ class BookWeaverCLI:
     def run_tts_synthesis(self):
         context = self._get_chapter_context_from_user()
         if context: self.app.tts_pipeline.run(context)
-
-    def run_voice_conversion(self):
-        context = self._get_chapter_context_from_user()
-        if context: self.app.vc_pipeline.run(context)
 
     def _get_chapter_context_from_user(self) -> ProjectContext | None:
         try:
@@ -130,8 +124,7 @@ class BookWeaverCLI:
             print("  5. Генерация саммари (отдельно)")
             print("  6. Генерация сценария главы (отдельно)")
             print("  7. Синтез речи (TTS) главы")
-            print("  8. Voice Conversion главы")
-            print("  9. Генерация иллюстраций (ComfyUI) [BETA]")
+            print("  8. Генерация иллюстраций (ComfyUI) [BETA]")
             print("-" * 20)
             print("0. Выход")
             print("=" * 60)
@@ -145,8 +138,7 @@ class BookWeaverCLI:
             elif choice == '5': self.run_summary_generation()
             elif choice == '6': self.run_scenario_generation()
             elif choice == '7': self.run_tts_synthesis()
-            elif choice == '8': self.run_voice_conversion()
-            elif choice == '9': self.run_image_generation()
+            elif choice == '8': self.run_image_generation()
             elif choice == '0': break
             else: print("Неверный ввод.")
 

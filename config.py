@@ -25,12 +25,11 @@ LOG_FILE_PATH = LOGS_DIR / LOG_FILE_NAME
 
 # --- ASSETS ---
 ASSETS_DIR = BASE_DIR / "assets"
-EMOTION_REFERENCES_DIR = ASSETS_DIR / "emotion_references"
 AMBIENT_DIR = ASSETS_DIR / "ambient"
 PRONUNCIATION_DICT_FILE = ASSETS_DIR / "pronunciation_dictionary.json"
 AMBIENT_LIBRARY_FILE = ASSETS_DIR / "ambient_library.json"
-EMOTION_REFERENCE_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "emotion_reference_library.json"
-SFX_LIBRARY_FILE = EMOTION_REFERENCES_DIR / "sfx_library.json"
+EMOTION_REFERENCE_LIBRARY_FILE = ASSETS_DIR / "emotion_reference_library.json"
+SFX_LIBRARY_FILE = ASSETS_DIR / "sfx_library.json"
 COMFY_WORKFLOW_FILE = ASSETS_DIR / "comfy_workflow.json"
 VOICES_DIR = STORAGE_DIR / "voices"
 
@@ -59,9 +58,8 @@ COMFY_NODE_MAPPING = {
     # "empty_latent_node_id": "5",
 }
 
-# TTS / VC Settings
+# TTS
 COSYVOICE_API_URL = os.environ.get("COSYVOICE_API_URL", "http://localhost:8188")
-VC_MODEL_NAME = "voice_conversion_models/multilingual/vctk/freevc24"
 TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 # Ranobelib

@@ -5,7 +5,6 @@ from dotenv import load_dotenv
 
 import config
 from services.llm_service import LLMService
-from services.vc_service import VCService
 
 load_dotenv()
 
@@ -20,7 +19,6 @@ class ModelManager:
         self._services: Dict[str, object] = {}
         self._locks: Dict[str, Lock] = {
             'tts': Lock(),
-            'vc': Lock(),
             'llm_character_analyzer': Lock(),
             'llm_scenario_generator': Lock(),
             'llm_summary_generator': Lock(),
@@ -34,15 +32,6 @@ class ModelManager:
         if service_key not in self._services:
             from services.tts_service import TTSService
             self._services[service_key] = TTSService()
-        return self._services[service_key]
-
-    def get_vc_service(self) -> VCService:
-        """Возвращает экземпляр VCService."""
-        service_key = 'vc'
-        if service_key not in self._services:
-            with self._locks[service_key]:
-                if service_key not in self._services:
-                    self._services[service_key] = VCService(model_name=config.VC_MODEL_NAME)
         return self._services[service_key]
 
     def get_llm_service(self, service_type: str) -> LLMService:

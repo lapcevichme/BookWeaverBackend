@@ -19,7 +19,6 @@ from pipelines.character_analysis import CharacterAnalysisPipeline
 from pipelines.scenario_generation import ScenarioGenerationPipeline
 from pipelines.summary_generation import SummaryGenerationPipeline
 from pipelines.tts_pipeline import TTSPipeline
-from pipelines.vc_pipeline import VCPipeline
 from pipelines.image_generation_pipeline import (ImageGenerationPipeline)
 
 from utils.book_converter import BookConverter
@@ -44,7 +43,6 @@ class Application:
         self.scenario_pipeline = ScenarioGenerationPipeline(self.model_manager)
         self.summary_pipeline = SummaryGenerationPipeline(self.model_manager)
         self.tts_pipeline = TTSPipeline(self.model_manager)
-        self.vc_pipeline = VCPipeline(self.model_manager)
         self.image_pipeline = ImageGenerationPipeline()
 
         logger.info("✅ Пайплайны готовы к работе.")
