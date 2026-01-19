@@ -9,6 +9,7 @@ from api import state
 from api import tasks, projects, library, ai_tasks
 from api.mobile import mobile_api_router
 from api.models import ServerStateEnum
+# from api.mobile import gen_router
 from main import Application
 from utils.setup_logging import setup_logging
 
@@ -69,6 +70,7 @@ app.include_router(ai_tasks.router)
 app.include_router(mobile_api_router.api_router)
 app.include_router(mobile_api_router.static_router)
 app.include_router(mobile_api_router.download_router)
+# app.include_router(gen_router.router)
 
 
 @app.get("/", include_in_schema=False)
