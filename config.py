@@ -60,7 +60,6 @@ COMFY_NODE_MAPPING = {
 
 # TTS
 COSYVOICE_API_URL = os.environ.get("COSYVOICE_API_URL", "http://localhost:8188")
-TTS_MODEL_NAME = "tts_models/multilingual/multi-dataset/xtts_v2"
 
 # Ranobelib
 RANOBELIB_API_BASE_URL = "https://api.cdnlibs.org/api"
