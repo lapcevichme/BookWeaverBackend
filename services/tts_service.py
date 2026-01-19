@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 class TTSService(BaseTorchService):
     """
-    Сервис для TTS (CosyVoice) и Whisper (Aligner).
+    Сервис для TTS (CosyVoice API) и Whisper (Local Aligner).
+    Поддерживает VRAM Orchestration для Whisper.
     """
 
     def __init__(self):
@@ -25,7 +26,7 @@ class TTSService(BaseTorchService):
 
     @property
     def whisper_model(self):
-        """Ленивая загрузка Whisper (локально) для выравнивания и транскрипции референсов."""
+        """Ленивая загрузка Whisper (локально)."""
         if self._whisper_model is None:
             with self._whisper_load_lock:
                 if self._whisper_model is None:
@@ -35,15 +36,30 @@ class TTSService(BaseTorchService):
                         logger.critical("❌ Библиотека 'stable-ts' не установлена!")
                         return None
 
-                    logger.info("⏳ Загрузка весов stable_whisper (base)...")
+                    logger.info("⏳ VRAM: Загрузка весов stable_whisper (base) в видеопамять...")
                     try:
                         self._whisper_model = stable_whisper.load_model("base", device=self.device)
-                        logger.info("✅ Модель Whisper готова.")
+                        self._is_loaded = True
+                        logger.info("✅ Модель Whisper загружена.")
                     except Exception as e:
                         logger.error(f"❌ Ошибка загрузки Whisper: {e}", exc_info=True)
                         return None
 
         return self._whisper_model
+
+    def unload(self):
+        """
+        Принудительно выгружает Whisper из VRAM.
+        """
+        if self._whisper_model is not None:
+            logger.info("🔻 VRAM: Выгрузка модели Whisper...")
+            del self._whisper_model
+            self._whisper_model = None
+            self._is_loaded = False
+
+            self._clear_cuda_cache()
+        else:
+            logger.debug("VRAM: Whisper уже выгружен или не был загружен.")
 
     def _get_prompt_text(self, speaker_wav_path: Path) -> str:
         """Получает текст из референсного аудио (кэширует результат)."""
@@ -57,6 +73,7 @@ class TTSService(BaseTorchService):
             return " "
 
         try:
+            # logger.debug(f"Transcribing ref: {speaker_wav_path.name}")
             result = model.transcribe(path_str)
             text = result.text.strip()
             self._reference_transcription_cache[path_str] = text
@@ -66,15 +83,7 @@ class TTSService(BaseTorchService):
             return " "
 
     def synthesize(self, text: str, speaker_wav_path: Path, emotion: str = None) -> bytes | None:
-        """
-        Синтезирует аудио через CosyVoice API.
-
-        Args:
-            text: Текст реплики.
-            speaker_wav_path: Путь к голосу.
-            emotion: Эмоциональный тег (например: 'angry', 'sad', 'whisper').
-                     Если None или 'neutral', отправляется пустая инструкция.
-        """
+        """Синтез через API (не требует VRAM этого процесса)."""
         if not speaker_wav_path.exists():
             logger.error(f"Файл-образец голоса не найден: {speaker_wav_path}")
             return None
@@ -83,15 +92,13 @@ class TTSService(BaseTorchService):
 
         instruct_text = emotion if emotion and emotion.lower() != "neutral" else ""
 
-        audio_bytes = self.cosy_client.synthesize(
+        return self.cosy_client.synthesize(
             text=text,
             prompt_wav_path=speaker_wav_path,
             prompt_text=prompt_text,
             instruct_text=instruct_text,
             mode="zero_shot"
         )
-
-        return audio_bytes
 
     def generate_word_timings(self, text: str, audio_path: Path, language: str = "ru") -> list | None:
         """Генерирует таймкоды (субтитры) через Whisper."""

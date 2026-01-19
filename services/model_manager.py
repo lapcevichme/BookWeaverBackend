@@ -1,4 +1,5 @@
 import os
+import logging
 from threading import Lock
 from typing import Dict
 from dotenv import load_dotenv
@@ -7,12 +8,14 @@ import config
 from services.llm_service import LLMService
 
 load_dotenv()
+logger = logging.getLogger(__name__)
+
 
 class ModelManager:
     """
-    Централизованный менеджер для управления доступом к AI-сервисам.
-    Гарантирует, что для каждого сервиса существует только один экземпляр.
-    Вся логика Singleton находится здесь.
+    Централизованный менеджер ресурсов (Resource Orchestrator).
+    Реализует паттерны Singleton и Sequential Model Loading.
+    Позволяет динамически загружать и выгружать модели для экономии VRAM.
     """
 
     def __init__(self):
@@ -25,9 +28,7 @@ class ModelManager:
         }
 
     def get_tts_service(self):
-        """
-        Возвращает сервис TTS.
-        """
+        """Возвращает сервис TTS (Lazy Loading)."""
         service_key = "tts_service"
         if service_key not in self._services:
             from services.tts_service import TTSService
@@ -35,9 +36,7 @@ class ModelManager:
         return self._services[service_key]
 
     def get_llm_service(self, service_type: str) -> LLMService:
-        """
-        Возвращает экземпляр LLMService для конкретной задачи.
-        """
+        """Возвращает экземпляр LLMService."""
         provider = getattr(config, 'LLM_PROVIDER', 'google')
 
         api_key = None
@@ -71,3 +70,23 @@ class ModelManager:
                         api_key=api_key
                     )
         return self._services[service_key]
+
+    def unload_service(self, service_key: str):
+        """
+        Ключевой метод для VRAM Orchestration.
+        Позволяет принудительно освободить ресурсы занятые сервисом.
+        """
+        if service_key in self._services:
+            service = self._services[service_key]
+
+            if hasattr(service, 'unload'):
+                logger.info(f"♻️ ORCHESTRATOR: Выгрузка сервиса '{service_key}' для освобождения VRAM...")
+                service.unload()
+
+            pass
+
+    def unload_all_gpu_models(self):
+        """Полная очистка GPU перед запуском очень тяжелых задач (например, FLUX)."""
+        logger.info("🚨 ORCHESTRATOR: Emergency VRAM cleanup requested.")
+        if 'tts_service' in self._services:
+            self.unload_service('tts_service')

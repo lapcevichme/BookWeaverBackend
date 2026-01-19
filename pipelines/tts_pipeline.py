@@ -162,6 +162,10 @@ class TTSPipeline:
             logger.error(error_msg, exc_info=True)
             raise
 
+        if self.model_manager:
+            logger.info("🏁 TTS Pipeline завершен. Освобождаем ресурсы...")
+            self.model_manager.unload_service("tts_service")
+
     def _update_manifest_status(self, context: ProjectContext):
         """Обновляет статус главы на 'audio_ready'."""
         try:
