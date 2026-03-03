@@ -6,10 +6,14 @@ import random
 import re
 import time
 import uuid
+import hashlib
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
+from concurrent.futures import ThreadPoolExecutor
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 import urllib3
 
 try:
@@ -28,14 +32,48 @@ try:
     PIL_AVAILABLE = True
 except ImportError:
     PIL_AVAILABLE = False
-    # реально 1 том был 100 мб вместо 10
     print("⚠️ Pillow не установлен - картинки будут встраиваться БЕЗ сжатия (возможен огромный размер EPUB)")
     print("   pip install Pillow")
+
+try:
+    from tqdm import tqdm
+
+    TQDM_AVAILABLE = True
+except ImportError:
+    TQDM_AVAILABLE = False
+    print("⚠️ tqdm не установлен - красивого прогресс-бара не будет")
+    print("   pip install tqdm")
 
 import config
 
 logger = logging.getLogger(__name__)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+REQUEST_TIMEOUT = 15
+MAX_RETRIES = 5
+DELAY_BASE = 1.8
+DELAY_JITTER = 0.9
+
+DEFAULT_USER_AGENT = (
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
+    '(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36'
+)
+
+RANOBE_API_FIELDS = [
+    "background", "eng_name", "otherNames", "summary", "releaseDate",
+    "type_id", "caution", "views", "close_view", "rate_avg", "rate",
+    "genres", "tags", "teams", "user", "franchise", "authors", "publisher",
+    "userRating", "moderated", "metadata", "metadata.count",
+    "metadata.close_comments", "manga_status_id", "chap_count",
+    "status_id", "artists", "format"
+]
+
+EPUB_DEFAULT_CSS = """
+body { font-family: serif; line-height: 1.7; margin: 5% 8%; }
+h1, h2 { text-align: center; margin: 1.5em 0; }
+p { margin: 0.8em 0; text-indent: 1.2em; }
+img { max-width: 100%; height: auto; display: block; margin: 1.5em auto; }
+"""
 
 
 class RanobeLibLoader:
@@ -56,11 +94,25 @@ class RanobeLibLoader:
         self.debug_requests = debug_requests
         self.epub_book = None
         self.chapter_items = []
+        self.volumes = {}
         self.embedded_images = {}
         self.output_format = "txt"
 
         self.max_image_width = 1200
         self.image_quality = 75
+
+        self.session = requests.Session()
+        self.session.headers.update(self.headers)
+
+        retries = Retry(
+            total=MAX_RETRIES,
+            backoff_factor=DELAY_BASE,
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["GET", "POST"]
+        )
+        adapter = HTTPAdapter(max_retries=retries)
+        self.session.mount("http://", adapter)
+        self.session.mount("https://", adapter)
 
         logger.info("RanobeLibLoader инициализирован.")
 
@@ -69,7 +121,7 @@ class RanobeLibLoader:
             return
 
         print(f"\n[DEBUG REQUEST] {method} {url}")
-        print("Headers:", json.dumps(dict(self.headers), indent=2, ensure_ascii=False))
+        print("Headers:", json.dumps(dict(self.session.headers), indent=2, ensure_ascii=False))
 
         if 'data' in kwargs or 'json' in kwargs:
             body = kwargs.get('data') or kwargs.get('json')
@@ -107,7 +159,6 @@ class RanobeLibLoader:
         branches = self._fetch_branches(numeric_id)
         branch_id = self._select_best_branch(branches)
 
-        # TODO - вернуть возможность ветку выбирать, наверное нужно это. Но через консоль неприятно конечно
         if not branch_id:
             logger.error("Не удалось определить ветку перевода.")
             return
@@ -120,6 +171,12 @@ class RanobeLibLoader:
         base_path = output_dir if output_dir else config.INPUT_DIR
         save_dir = base_path / folder_name
         save_dir.mkdir(parents=True, exist_ok=True)
+
+        self.cache_dir = save_dir / ".cache"
+        self.chapters_cache_dir = self.cache_dir / "chapters"
+        self.images_cache_dir = self.cache_dir / "images"
+        self.chapters_cache_dir.mkdir(parents=True, exist_ok=True)
+        self.images_cache_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info(f"📁 Директория сохранения: {save_dir}")
 
@@ -141,7 +198,13 @@ class RanobeLibLoader:
         if self.output_format == "epub":
             self._init_epub_book(manga_info, url, cover_filename, save_dir)
 
-        for i, ch in enumerate(chapters):
+        if TQDM_AVAILABLE:
+            chapter_iterator = tqdm(chapters, desc="Скачивание", unit="гл",
+                                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]")
+        else:
+            chapter_iterator = chapters
+
+        for i, ch in enumerate(chapter_iterator):
             vol = ch.get('volume', '1')
             num = ch.get('number', '0')
             ch_name = ch.get('name', '').strip()
@@ -150,33 +213,49 @@ class RanobeLibLoader:
             if ch_name:
                 ch_display += f" - {ch_name}"
 
-            # TODO - норм прогресс бар сделать
-            if i == 0 or (i + 1) % 5 == 0 or i == total - 1:
+            if TQDM_AVAILABLE:
+                short_display = (ch_display[:40] + '..') if len(ch_display) > 40 else ch_display
+                chapter_iterator.set_postfix_str(short_display)
+            elif i == 0 or (i + 1) % 5 == 0 or i == total - 1:
                 logger.info(f"--> Обработка: {ch_display} ({i + 1}/{total})")
 
             try:
-                data = self._fetch_chapter_content(full_id, vol, num, branch_id)
+                safe_ch_name = re.sub(r'[<>:"/\\|?*]', '_', ch_name[:80]) if ch_name else f"ch_{num.replace('.', '_')}"
+
+                if self.output_format == "txt":
+                    vol_path = save_dir / f"vol_{str(vol).zfill(2)}"
+                    file_path = vol_path / f"{num.replace('.', '_')} — {safe_ch_name}.txt"
+                    if file_path.exists() and file_path.stat().st_size > 0:
+                        continue
+                    vol_path.mkdir(exist_ok=True)
+
+                cache_file = self.chapters_cache_dir / f"v{vol}_c{num}.json"
+                data = None
+
+                if cache_file.exists():
+                    try:
+                        data = json.loads(cache_file.read_text(encoding='utf-8'))
+                    except json.JSONDecodeError:
+                        pass
+
+                if not data:
+                    data = self._fetch_chapter_content(full_id, vol, num, branch_id)
+                    if data:
+                        cache_file.write_text(json.dumps(data, ensure_ascii=False), encoding='utf-8')
+                    time.sleep(DELAY_BASE + random.uniform(0, DELAY_JITTER))
+
                 if not data:
                     logger.warning(f"Пустой контент: Том {vol} Глава {num}")
                     continue
 
                 text = self._parse_content_node(data.get('content'), data.get('attachments', []), download_images)
-
-                safe_ch_name = re.sub(r'[<>:"/\\|?*]', '_', ch_name[:80]) if ch_name else f"ch_{num.replace('.', '_')}"
-
                 chapter_url = f"https://ranobelib.me/ru/{manga_info.get('slug_url') or full_id}/read/v{vol}/c{num}?bid={branch_id}"
 
                 if self.output_format == "epub":
-                    self._add_chapter_to_epub(text, vol, num, ranobe_title, ch_display, chapter_url)
+                    self._add_chapter_to_epub(text, vol, num, ch_display, chapter_url)
                 else:
-                    vol_path = save_dir / f"vol_{str(vol).zfill(2)}"
-                    vol_path.mkdir(exist_ok=True)
-                    file_path = vol_path / f"{num.replace('.', '_')} — {safe_ch_name}.txt"
                     content_to_write = f"{ranobe_title}\n{ch_display}\n\n{text}"
                     file_path.write_text(content_to_write, encoding='utf-8')
-
-                # По идее 429 только с VPN и прокси вылезала. Не уверен что нужен такой большой сон, протестить без впн побольше
-                time.sleep(1.8 + random.uniform(0, 0.9))
 
             except Exception as e:
                 logger.error(f"Ошибка при скачивании {vol}-{num}: {e}")
@@ -187,36 +266,18 @@ class RanobeLibLoader:
         logger.info("🎉 Загрузка ранобэ завершена!")
 
     def _make_request(self, method: str, url: str, **kwargs) -> Optional[requests.Response]:
-        max_retries = 5
-        for attempt in range(max_retries):
-            try:
-                response = requests.request(
-                    method, url, headers=self.headers, verify=False, timeout=15, **kwargs
-                )
+        try:
+            response = self.session.request(
+                method, url, verify=False, timeout=REQUEST_TIMEOUT, **kwargs
+            )
+            self._debug_log_request(method, url, response, **kwargs)
+            response.raise_for_status()
+            return response
 
-                self._debug_log_request(method, url, response, **kwargs)
-
-                if response.status_code == 429:
-                    wait = (2 ** attempt) + random.uniform(0, 2)
-                    logger.warning(f"429 Too Many Requests - ждём {wait:.1f} сек (попытка {attempt + 1}/{max_retries})")
-                    time.sleep(wait)
-                    continue
-
-                response.raise_for_status()
-                return response
-
-            except requests.exceptions.HTTPError as e:
-                self._debug_log_request(method, url, e.response, **kwargs)
-                if e.response and e.response.status_code == 429:
-                    continue
-                logger.error(f"HTTP ошибка {url}: {e}")
-                return None
-            except Exception as e:
-                logger.error(f"Ошибка запроса {url}: {e}")
-                return None
-
-        logger.error(f"Превышено количество попыток для {url}")
-        return None
+        except requests.exceptions.RequestException as e:
+            self._debug_log_request(method, url, getattr(e, 'response', None), **kwargs)
+            logger.error(f"Ошибка запроса {url}: {e}")
+            return None
 
     def _extract_ids(self, url: str) -> Tuple[Optional[str], Optional[str]]:
         match = re.search(r'ranobelib\.me/(?:ru/book/)?((\d+)--[\w\-]+)', url)
@@ -233,18 +294,7 @@ class RanobeLibLoader:
 
     def _fetch_ranobe_data(self, full_id: str) -> Optional[Dict]:
         url = f"{self.api_url}/manga/{full_id}"
-
-        # Обход 422 с полями - TODO - вынести куда-то поля
-        wanted_fields = [
-            "background", "eng_name", "otherNames", "summary", "releaseDate",
-            "type_id", "caution", "views", "close_view", "rate_avg", "rate",
-            "genres", "tags", "teams", "user", "franchise", "authors", "publisher",
-            "userRating", "moderated", "metadata", "metadata.count",
-            "metadata.close_comments", "manga_status_id", "chap_count",
-            "status_id", "artists", "format"
-        ]
-
-        params = [("fields[]", field) for field in wanted_fields]
+        params = [("fields[]", field) for field in RANOBE_API_FIELDS]
 
         resp = self._make_request("GET", url, params=params)
         if resp:
@@ -252,7 +302,6 @@ class RanobeLibLoader:
             if data:
                 return data
 
-        # Fallback, но вроде бы все подобрал. Главное чтобы апи не сменили снова xd
         logger.warning("Запрос с fields[] провалился - пробуем минимальный")
         resp = self._make_request("GET", url)
         return resp.json().get('data') if resp else None
@@ -338,7 +387,6 @@ class RanobeLibLoader:
         return re.sub(r'\n{3,}', '\n\n', "".join(text_parts)).strip()
 
     def _optimize_image_data(self, image_data: bytes) -> Tuple[bytes, str]:
-        """Ужимает картинку через Pillow для уменьшения размера EPUB"""
         if not PIL_AVAILABLE:
             return image_data, 'jpg'
 
@@ -364,8 +412,21 @@ class RanobeLibLoader:
             img.save(out_io, format='JPEG', quality=self.image_quality, optimize=True)
             return out_io.getvalue(), 'jpg'
         except Exception as e:
-            logger.warning(f"      ⚠️ Не удалось оптимизировать картинку, используем оригинал: {e}")
+            if not TQDM_AVAILABLE:
+                logger.warning(f"      ⚠️ Не удалось оптимизировать картинку, используем оригинал: {e}")
             return image_data, 'jpg'
+
+    def _get_image_headers(self, referer: str = 'https://ranobelib.me/') -> dict:
+        headers = self.headers.copy()
+        headers.update({
+            'User-Agent': DEFAULT_USER_AGENT,
+            'Referer': referer,
+            'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
+            'sec-ch-ua-mobile': '?0',
+            'sec-ch-ua-platform': '"Windows"',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
+        })
+        return headers
 
     def _download_cover(self, manga_info: Dict, folder_path: Path) -> Optional[str]:
         cover_obj = manga_info.get('cover') or manga_info.get('background') or {}
@@ -374,18 +435,8 @@ class RanobeLibLoader:
         if not url: return None
         if not url.startswith('http'): url = f"{self.img_url}{url}"
 
-        headers = self.headers.copy()
-        headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-            'Referer': 'https://ranobelib.me/',
-            'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-        })
-
         try:
-            resp = requests.get(url, headers=headers, verify=False, timeout=10)
+            resp = self.session.get(url, headers=self._get_image_headers(), verify=False, timeout=REQUEST_TIMEOUT)
             resp.raise_for_status()
 
             image_data = resp.content
@@ -418,7 +469,6 @@ class RanobeLibLoader:
             "description": manga_info.get('summary', '').strip(),
             "source_url": source_url,
             "type": manga_info.get('type', {}).get('label'),
-            "country": manga_info.get('type', {}).get('label'),
             "status": manga_info.get('status', {}).get('label'),
             "scanlate_status": manga_info.get('scanlateStatus', {}).get('label'),
             "year": manga_info.get('releaseDate'),
@@ -440,8 +490,6 @@ class RanobeLibLoader:
         meta_path = folder_path / 'metadata.json'
         with open(meta_path, 'w', encoding='utf-8') as f:
             json.dump(meta, f, ensure_ascii=False, indent=2)
-
-        logger.info(f"Метаданные сохранены: {meta_path}")
 
     def _format_label(self, data: Dict) -> str:
         return (data.get('rus_name') or data.get('name') or data.get('eng_name') or 'unknown_ranobe').strip()
@@ -478,27 +526,98 @@ class RanobeLibLoader:
             uid="style_default",
             file_name="style.css",
             media_type="text/css",
-            content=(
-                "body { font-family: serif; line-height: 1.7; margin: 5% 8%; }\n"
-                "h1, h2 { text-align: center; margin: 1.5em 0; }\n"
-                "p { margin: 0.8em 0; text-indent: 1.2em; }\n"
-                "img { max-width: 100%; height: auto; display: block; margin: 1.5em auto; }\n"
-            ).encode("utf-8")
+            content=EPUB_DEFAULT_CSS.encode("utf-8")
         )
         self.epub_book.add_item(css)
-
         self.chapter_items = []
+        self.volumes = {}
 
-    def _add_chapter_to_epub(self, text: str, vol: str, num: str, chapter_title: str,
-                             chapter_url: str):
+    def _download_image_task(self, url: str, referer: str) -> Optional[Tuple[str, str, Any]]:
+        """Конкурентная задача для скачивания отдельного изображения"""
+        if url in self.embedded_images:
+            return None
+
+        img_hash = hashlib.md5(url.encode('utf-8')).hexdigest()
+
+        cached_data = None
+        cached_ext = 'jpg'
+        for ext in ['jpg', 'png', 'webp', 'gif']:
+            p = self.images_cache_dir / f"{img_hash}.{ext}"
+            if p.exists():
+                cached_data = p.read_bytes()
+                cached_ext = ext
+                break
+
+        try:
+            if cached_data:
+                image_data = cached_data
+                ext = cached_ext
+            else:
+                resp = self.session.get(url, headers=self._get_image_headers(referer), verify=False,
+                                        timeout=REQUEST_TIMEOUT)
+                if resp.status_code == 200:
+                    image_data = resp.content
+                    ext = 'jpg'
+
+                    if PIL_AVAILABLE:
+                        image_data, ext = self._optimize_image_data(image_data)
+                    else:
+                        content_type = resp.headers.get('content-type', '').lower()
+                        if 'png' in content_type or url.lower().endswith('.png'):
+                            ext = 'png'
+                        elif 'webp' in content_type or url.lower().endswith('.webp'):
+                            ext = 'webp'
+                        elif 'gif' in content_type or url.lower().endswith('.gif'):
+                            ext = 'gif'
+
+                    (self.images_cache_dir / f"{img_hash}.{ext}").write_bytes(image_data)
+                else:
+                    if not TQDM_AVAILABLE:
+                        logger.warning(f"       ⚠️ Не удалось скачать иллюстрацию (код {resp.status_code})")
+                    return None
+
+            img_id = img_hash[:10]
+            file_name = f"images/img_{img_id}.{ext}"
+
+            img_item = epub.EpubItem(
+                uid=f"image_{img_id}",
+                file_name=file_name,
+                media_type=f"image/{'jpeg' if ext == 'jpg' else ext}",
+                content=image_data
+            )
+            return url, file_name, img_item
+        except Exception as e:
+            if not TQDM_AVAILABLE:
+                logger.warning(f"      ⚠️ Ошибка скачивания иллюстрации: {e}")
+
+        return None
+
+    def _add_chapter_to_epub(self, text: str, vol: str, num: str, chapter_title: str, chapter_url: str):
+        image_urls = list(set(re.findall(r'\[Image:\s*(.*?)\s*\]', text)))
+        image_urls = [u for u in image_urls if u not in self.embedded_images]
+
+        if image_urls:
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                results = executor.map(lambda u: self._download_image_task(u, chapter_url), image_urls)
+                for res in results:
+                    if res:
+                        url, file_name, img_item = res
+                        self.epub_book.add_item(img_item)
+                        self.embedded_images[url] = file_name
+
         file_name = f"content/vol_{vol.zfill(2)}_ch_{num.replace('.', '_')}.xhtml"
         c = epub.EpubHtml(title=chapter_title, file_name=file_name, lang="ru")
         c.add_link(href="../style.css", rel="stylesheet", type="text/css")
-        c.content = self._text_to_xhtml(chapter_title, text, chapter_url).encode("utf-8")
+        c.content = self._text_to_xhtml(chapter_title, text).encode("utf-8")
+
         self.epub_book.add_item(c)
         self.chapter_items.append(c)
 
-    def _text_to_xhtml(self, chapter_title: str, text: str, chapter_url: str) -> str:
+        if vol not in self.volumes:
+            self.volumes[vol] = []
+        self.volumes[vol].append(c)
+
+    def _text_to_xhtml(self, chapter_title: str, text: str) -> str:
         soup = BeautifulSoup("<html><head></head><body></body></html>", "lxml")
         body = soup.body
 
@@ -513,11 +632,7 @@ class RanobeLibLoader:
                 for part in parts:
                     if part.startswith("[Image:") and part.endswith("]"):
                         url = part[7:-1].strip()
-
-                        # Встройка картинок
-                        local_path = self._embed_image(url, chapter_url)
-                        img_src = local_path if local_path else url
-
+                        img_src = f"../{self.embedded_images[url]}" if url in self.embedded_images else url
                         img = soup.new_tag("img", src=img_src, alt="Иллюстрация")
                         p.append(img)
                     elif part.strip():
@@ -537,75 +652,23 @@ class RanobeLibLoader:
 {str(soup.body)}
 </html>'''
 
-    def _embed_image(self, url: str, referer: str) -> Optional[str]:
-        if not hasattr(self, 'embedded_images'):
-            self.embedded_images = {}
-
-        if url in self.embedded_images:
-            return f"../{self.embedded_images[url]}"
-
-        logger.info(f"      ⬇️ Скачивание иллюстрации...")
-
-        # Обход хотлинка - TODO - найти какой-то интереснее способ
-        headers = self.headers.copy()
-        headers.update({
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-            'Referer': referer,
-            'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-            'sec-ch-ua-mobile': '?0',
-            'sec-ch-ua-platform': '"Windows"',
-            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8'
-        })
-
-        try:
-            resp = requests.get(url, headers=headers, verify=False, timeout=15)
-            if resp.status_code == 200:
-                image_data = resp.content
-                ext = 'jpg'
-
-                if PIL_AVAILABLE:
-                    image_data, ext = self._optimize_image_data(image_data)
-                else:
-                    content_type = resp.headers.get('content-type', '').lower()
-                    if 'png' in content_type or url.lower().endswith('.png'):
-                        ext = 'png'
-                    elif 'webp' in content_type or url.lower().endswith('.webp'):
-                        ext = 'webp'
-                    elif 'gif' in content_type or url.lower().endswith('.gif'):
-                        ext = 'gif'
-
-                img_id = uuid.uuid4().hex[:10]
-                file_name = f"images/img_{img_id}.{ext}"
-
-                img_item = epub.EpubItem(
-                    uid=f"image_{img_id}",
-                    file_name=file_name,
-                    media_type=f"image/{'jpeg' if ext == 'jpg' else ext}",
-                    content=image_data
-                )
-                self.epub_book.add_item(img_item)
-
-                self.embedded_images[url] = file_name
-                return f"../{file_name}"
-            else:
-                logger.warning(f"       ⚠️ Не удалось скачать иллюстрацию (код {resp.status_code})")
-        except Exception as e:
-            logger.warning(f"      ⚠️ Ошибка скачивания иллюстрации: {e}")
-
-        return None
-
     def _finalize_epub(self, save_dir: Path, title: str):
         if not self.epub_book or not self.chapter_items:
             return
+
+        toc = []
+        for vol_num, chapters in self.volumes.items():
+            vol_title = f"Том {vol_num}"
+            toc.append((epub.Section(vol_title), tuple(chapters)))
+
+        self.epub_book.toc = tuple(toc)
 
         nav = epub.EpubNav()
         nav.file_name = 'nav.xhtml'
         nav.title = 'Содержание'
         nav.add_link(href='style.css', rel='stylesheet', type='text/css')
-        nav.toc = self.chapter_items
         self.epub_book.add_item(nav)
         self.epub_book.add_item(epub.EpubNcx())
-        self.epub_book.toc = self.chapter_items
 
         spine = ['cover'] if self.epub_book.get_item_with_id('cover') else []
         spine += [nav] + self.chapter_items
