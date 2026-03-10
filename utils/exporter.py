@@ -41,12 +41,17 @@ class BookExporter:
         path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
     def _copy_static_assets(self, used_ambients: Set[str]):
-        """Копирует статичные ассеты (обложка, эмбиент)."""
-        # Обложка
+        """Копирует статичные ассеты (обложка, эмбиент, иллюстрации)."""
         if self.context.cover_file.exists():
             shutil.copy2(self.context.cover_file, self.temp_build_dir / self.context.cover_file.name)
 
-        # Эмбиент
+        source_images_dir = self.context.book_dir / "images"
+        if source_images_dir.exists() and source_images_dir.is_dir():
+            dest_images_dir = self.temp_build_dir / "content" / "images"
+            shutil.copytree(source_images_dir, dest_images_dir, dirs_exist_ok=True)
+            image_count = len(list(source_images_dir.iterdir()))
+            logger.info(f"Иллюстрации успешно скопированы в архив ({image_count} файлов).")
+
         ambient_audio_dir = config.AMBIENT_DIR
         dest_ambient_dir = self.temp_build_dir / "ambient"
 
@@ -135,7 +140,6 @@ class BookExporter:
 
                 total_book_duration += duration_ms
 
-                # "легкий" JSON для мобилки
                 chapter_data = {
                     "id": cid,
                     "duration_ms": duration_ms,
@@ -154,7 +158,6 @@ class BookExporter:
 
             self._copy_static_assets(used_ambients)
 
-            # Архивация
             logger.info(f"Сжатие в {self.archive_path.name}...")
             shutil.make_archive(str(self.archive_path.with_suffix('')), 'zip', self.temp_build_dir)
 

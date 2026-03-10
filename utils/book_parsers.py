@@ -4,6 +4,7 @@ import zipfile
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
+from markdownify import markdownify as md
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any, List
 
@@ -11,18 +12,21 @@ from typing import Dict, Optional, Tuple, Any, List
 class BookParser:
     """Базовый интерфейс для парсеров книг."""
 
-    def parse(self, file_path: Path) -> Tuple[Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes]]:
+    def parse(self, file_path: Path) -> Tuple[
+        Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes], Dict[str, bytes]]:
         """
         Возвращает:
         1. Структуру {volume: {chapter: text}}
         2. Словарь метаданных {'title': str, 'author': str, 'tags': list, 'language': str, ...}
         3. Байты обложки (если есть)
+        4. Словарь картинок {filename: bytes}
         """
         raise NotImplementedError
 
 
 class EpubParser(BookParser):
-    def parse(self, file_path: Path) -> Tuple[Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes]]:
+    def parse(self, file_path: Path) -> Tuple[
+        Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes], Dict[str, bytes]]:
         epub.warnings.simplefilter('ignore')
 
         book = epub.read_epub(str(file_path))
@@ -34,6 +38,7 @@ class EpubParser(BookParser):
         tags = self._extract_list_metadata(book, 'subject')
 
         cover_bytes = self._extract_cover(book)
+        images_dict = self._extract_all_images(book)
         volumes = self._parse_content(book)
 
         meta = {
@@ -45,7 +50,7 @@ class EpubParser(BookParser):
             "source": "epub_import"
         }
 
-        return volumes, meta, cover_bytes
+        return volumes, meta, cover_bytes, images_dict
 
     def _extract_metadata(self, book, meta_type: str) -> Optional[str]:
         try:
@@ -57,7 +62,6 @@ class EpubParser(BookParser):
         return None
 
     def _extract_list_metadata(self, book, meta_type: str) -> List[str]:
-        """Извлекает список значений (например, для тегов/жанров)."""
         results = []
         try:
             meta_list = book.get_metadata('DC', meta_type)
@@ -81,6 +85,15 @@ class EpubParser(BookParser):
         except:
             pass
         return None
+
+    def _extract_all_images(self, book) -> Dict[str, bytes]:
+        images = {}
+        for item in book.get_items_of_type(ebooklib.ITEM_IMAGE):
+            name = item.get_name().lower()
+            if 'cover' not in name:
+                flat_name = Path(item.file_name).name
+                images[flat_name] = item.get_content()
+        return images
 
     def _get_flat_toc_links(self, toc_items):
         links = []
@@ -118,8 +131,21 @@ class EpubParser(BookParser):
                 chapter_counter += 1
 
             if href in content_map:
-                soup = BeautifulSoup(content_map[href], 'html.parser')
-                text = soup.get_text(separator='\n', strip=True)
+                raw_html = content_map[href].decode('utf-8') if isinstance(content_map[href], bytes) else content_map[
+                    href]
+                soup = BeautifulSoup(raw_html, 'html.parser')
+
+                body = soup.find('body') or soup
+
+                for img in body.find_all('img'):
+                    src = img.get('src')
+                    if src:
+                        flat_name = Path(src).name
+                        img['src'] = f"../images/{flat_name}"
+
+                text = md(str(body), heading_style="ATX", strip=['a', 'script', 'style'])
+                text = re.sub(r'\n{3,}', '\n\n', text).strip()
+
                 if not text: continue
 
                 if current_vol not in volumes: volumes[current_vol] = {}
@@ -134,8 +160,20 @@ class EpubParser(BookParser):
         volumes = {1: {}}
         chap_count = 1
         for item in book.get_items_of_type(ebooklib.ITEM_DOCUMENT):
-            soup = BeautifulSoup(item.get_content(), 'html.parser')
-            text = soup.get_text(separator='\n', strip=True)
+            raw_html = item.get_content().decode('utf-8') if isinstance(item.get_content(),
+                                                                        bytes) else item.get_content()
+            soup = BeautifulSoup(raw_html, 'html.parser')
+            body = soup.find('body') or soup
+
+            for img in body.find_all('img'):
+                src = img.get('src')
+                if src:
+                    flat_name = Path(src).name
+                    img['src'] = f"../images/{flat_name}"
+
+            text = md(str(body), heading_style="ATX", strip=['a', 'script', 'style'])
+            text = re.sub(r'\n{3,}', '\n\n', text).strip()
+
             if len(text) > 100:
                 volumes[1][chap_count] = text
                 chap_count += 1
@@ -143,7 +181,8 @@ class EpubParser(BookParser):
 
 
 class TxtParser(BookParser):
-    def parse(self, file_path: Path) -> Tuple[Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes]]:
+    def parse(self, file_path: Path) -> Tuple[
+        Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes], Dict[str, bytes]]:
         full_text = file_path.read_text(encoding='utf-8')
 
         meta = {
@@ -161,7 +200,7 @@ class TxtParser(BookParser):
         volumes = {}
 
         if not headers:
-            return {1: {1: full_text}}, meta, None
+            return {1: {1: full_text}}, meta, None, {}
 
         content_splits = [full_text[h.end():(headers[i + 1].start() if i + 1 < len(headers) else None)]
                           for i, h in enumerate(headers)]
@@ -181,14 +220,16 @@ class TxtParser(BookParser):
                 if current_vol not in volumes: volumes[current_vol] = {}
                 volumes[current_vol][c_num] = text
 
-        return volumes, meta, None
+        return volumes, meta, None, {}
 
 
 class ZipParser(BookParser):
-    def parse(self, file_path: Path) -> Tuple[Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes]]:
+    def parse(self, file_path: Path) -> Tuple[
+        Dict[int, Dict[int, str]], Dict[str, Any], Optional[bytes], Dict[str, bytes]]:
         volumes = {}
         meta = {"source": "zip_import", "tags": [], "language": "ru"}
         cover_bytes = None
+        images_dict = {}
 
         with zipfile.ZipFile(file_path, 'r') as zf:
             file_names = zf.namelist()
@@ -204,7 +245,11 @@ class ZipParser(BookParser):
             for name in file_names:
                 if 'cover' in name.lower() and name.endswith(('.jpg', '.png', '.jpeg')):
                     cover_bytes = zf.read(name)
-                    break
+                    continue
+
+                if name.endswith(('.jpg', '.png', '.jpeg', '.webp', '.gif')):
+                    flat_name = Path(name).name
+                    images_dict[flat_name] = zf.read(name)
 
             for name in file_names:
                 if not name.endswith('.txt') or 'info.txt' in name:
@@ -227,4 +272,4 @@ class ZipParser(BookParser):
                         if vol not in volumes: volumes[vol] = {}
                         volumes[vol][chap] = text
 
-        return volumes, meta, cover_bytes
+        return volumes, meta, cover_bytes, images_dict

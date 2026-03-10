@@ -28,7 +28,6 @@ class BookConverter:
     def run(self):
         print(f"🚀 Запуск конвертации: '{self.book_name}'")
 
-        # TODO: в проде что-то побезопаснее придумать
         if self.project_input_dir.exists():
             print(f"⚠️ Удаление старой папки: {self.project_input_dir}")
             shutil.rmtree(self.project_input_dir)
@@ -50,9 +49,8 @@ class BookConverter:
         else:
             raise NotImplementedError(f"Формат {suffix} не поддерживается")
 
-        # Парсинг
         try:
-            volumes, meta, cover_bytes = parser.parse(self.input_file)
+            volumes, meta, cover_bytes, images_dict = parser.parse(self.input_file)
 
             print(f"   -> Парсинг завершен.")
             print(f"      Томов: {len(volumes)}")
@@ -64,6 +62,13 @@ class BookConverter:
 
         self._save_chapters(volumes)
         print(f"✅ Тексты сохранены.")
+
+        if images_dict:
+            images_dir = self.context.book_dir / "images"
+            images_dir.mkdir(exist_ok=True)
+            for img_name, img_bytes in images_dict.items():
+                (images_dir / img_name).write_bytes(img_bytes)
+            print(f"✅ Извлечено и сохранено картинок: {len(images_dict)}")
 
         self.project_output_dir.mkdir(parents=True, exist_ok=True)
         if cover_bytes:
@@ -86,7 +91,7 @@ class BookConverter:
             for chap_num, text in chapters.items():
                 clean_text = self._cleanup_text(text)
                 if clean_text:
-                    (vol_dir / f"chapter_{chap_num}.txt").write_text(clean_text, encoding='utf-8')
+                    (vol_dir / f"chapter_{chap_num}.md").write_text(clean_text, encoding='utf-8')
 
     def _cleanup_text(self, text: str) -> str:
         lines = [line.strip() for line in text.splitlines() if line.strip()]
