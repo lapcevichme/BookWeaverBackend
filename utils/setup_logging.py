@@ -10,7 +10,7 @@ def setup_logging():
     config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
     logger = logging.getLogger()
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     log_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
     formatter = logging.Formatter(log_format)

@@ -18,17 +18,15 @@ class CharacterAnalysisPipeline:
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
 
-        # BLACKLIST ТОЛЬКО ДЛЯ ПЕРЕИМЕНОВАНИЯ
-        # Не удаляем персонажей с такими именами, просто запрещаем переименовывать нормальные имена в эти.
-        # TODO: как-то в промптах дать модели знать, что нельзя так переименовывать - но вот галлюцинации хз как обойти.
         self.GENERIC_ROLES_BLACKLIST = {
-            # "доктор", "врач", "лекарь", "целитель",
-            # "служанка", "горничная", "фрейлина", "слуга",
-            # "стражник", "солдат", "офицер", "генерал",
-            # "евнух", "император", "супруга", "наложница",
-            # "повар", "кучер", "бандит", "вор",
-            # "деревенщина", "крестьянин", "житель",
-            # "мальчик", "девочка", "старик", "старуха", "мужчина", "женщина"
+            "доктор", "врач", "лекарь", "целитель",
+            "служанка", "горничная", "фрейлина", "слуга", "раб", "рабыня",
+            "стражник", "солдат", "офицер", "генерал", "охранник", "воин",
+            "евнух", "император", "супруга", "наложница",
+            "повар", "кучер", "бандит", "вор", "убийца",
+            "деревенщина", "крестьянин", "житель", "горожанин",
+            "мальчик", "девочка", "старик", "старуха", "мужчина", "женщина",
+            "парень", "девушка", "неизвестный", "незнакомец", "голос"
         }
 
         logger.info("✅ Пайплайн CharacterAnalysisPipeline инициализирован.")
@@ -68,10 +66,13 @@ class CharacterAnalysisPipeline:
                     continue
 
                 if self._is_chapter_processed(master_archive, chapter_id):
-                    logger.info(f"Глава {chapter_id} пропущена (уже есть в базе).")
+                    logger.info(f"⏭️ Глава {chapter_id} пропущена (уже обработана ранее).")
                     continue
 
                 if not chapter_text.strip():
+                    logger.warning(f"⚠️ Текст главы {chapter_id} пуст. Отмечаем как обработанную.")
+                    self._mark_chapter_processed(master_archive, chapter_id)
+                    master_archive.save(context.get_character_archive_path())
                     continue
 
                 chapter_summary_text = None
@@ -80,16 +81,17 @@ class CharacterAnalysisPipeline:
                 else:
                     logger.warning(f"⚠️ Для главы {chapter_id} нет саммари! RAG отключен.")
 
-                # Разведка
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Разведка...")
                 recon_result = self._perform_recon(master_archive, chapter_text, chapter_summary_text)
 
                 if not recon_result or (not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
+                    logger.info(f"🔍 В главе {chapter_id} персонажи не обнаружены.")
+                    self._mark_chapter_processed(master_archive, chapter_id)
+                    master_archive.save(context.get_character_archive_path())
                     continue
 
-                # Генерация патчей
                 relevant_chars = self._filter_archive_by_ids(master_archive, recon_result.mentioned_existing_character_ids)
-                relevant_characters_json = json.dumps([char.model_dump(mode='json') for char in relevant_chars], ensure_ascii=False, indent=2)
+                relevant_characters_json = json.dumps([char.model_dump(mode='json', include={'id', 'name', 'aliases', 'role_tier', 'visual_base'}) for char in relevant_chars], ensure_ascii=False)
 
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Глубокий анализ...")
                 patch_list = self._perform_operation(
@@ -103,19 +105,22 @@ class CharacterAnalysisPipeline:
                 else:
                     master_archive = self._add_empty_mentions(master_archive, recon_result.mentioned_existing_character_ids, chapter_id)
 
+                self._mark_chapter_processed(master_archive, chapter_id)
                 master_archive.save(context.get_character_archive_path())
 
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")
 
         except Exception as e:
-            logger.error(f"Ошибка пайплайна: {e}", exc_info=True)
+            logger.error(f"❌ Ошибка пайплайна: {e}", exc_info=True)
             raise
 
-    # Валидаторы
+    # --- ВАЛИДАТОРЫ ---
 
     def _is_role_name(self, name: str) -> bool:
         """Проверяет, содержит ли имя слово из черного списка ролей."""
-        if not name: return False
+        if not name or len(name) < 2:
+            return True
+
         name_lower = name.lower()
         for role in self.GENERIC_ROLES_BLACKLIST:
             if role in name_lower:
@@ -126,7 +131,6 @@ class CharacterAnalysisPipeline:
         """
         Блокирует переименование Нормального Имени в Роль.
         Пример: "Андрей" (ОК) -> "Доктор" (РОЛЬ) => БЛОК.
-        Пример: "Деревенщина 1" (РОЛЬ) -> "Андрей" (ОК) => РАЗРЕШЕНО.
         """
         current_is_role = self._is_role_name(current_name)
         new_is_role = self._is_role_name(new_name)
@@ -136,12 +140,15 @@ class CharacterAnalysisPipeline:
 
         return False
 
+    # --- LLM ВЫЗОВЫ ---
+
     def _perform_recon(self, archive: CharacterArchive, chapter_text: str, chapter_summary: Optional[str] = None) -> Optional[CharacterReconResult]:
         """
         Выполняет 'умную разведку' с использованием саммари.
+        Отправляем LLM только базовые данные (ID и Имя), чтобы экономить контекст.
         """
         fast_llm = self.model_manager.get_llm_service('character_analyzer')
-        known_chars_for_recon = [{"id": str(char.id), "name": char.name} for char in archive.characters]
+        known_chars_for_recon = [{"id": str(char.id), "name": char.name, "aliases": char.aliases} for char in archive.characters]
         known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False) if known_chars_for_recon else "[]"
 
         prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json, chapter_summary)
@@ -152,31 +159,33 @@ class CharacterAnalysisPipeline:
         prompt = prompts.format_character_patch_prompt(relevant_chars_json, new_names, text, vol, chap)
         return powerful_llm.call_for_pydantic(CharacterPatchList, prompt)
 
+    # --- ЛОГИКА ПРИМЕНЕНИЯ ПАТЧЕЙ ---
+
     def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int, chap: int, chapter_text: str) -> CharacterArchive:
-        """Применяет патчи с проверкой на коллизии имен (но без удаления мусора)."""
+        """Применяет патчи с проверкой на коллизии имен и фильтрацией мусора."""
         chapter_id = f"vol_{vol}_chap_{chap}"
         role_weights = {"background": 0, "minor": 1, "major": 2, "protagonist": 3}
         char_map = {char.id: char for char in archive.characters}
 
         for patch in patch_list.patches:
-            # Даже если промпт просил игнорировать, если модель все же прислала OBJECT - мы его не сохраняем.
-            # TODO: рассмотреть ситуацию когда объекты важны, в NGE есть такие
             if patch.entity_type == CharacterType.OBJECT:
-                logger.info(f"🗑️ SKIPPED OBJECT: {patch.name}")
+                logger.info(f"🗑️ ИГНОРИРУЕМ ОБЪЕКТ: {patch.name}")
                 continue
 
-            # EXISTING CHARACTER
+            if not patch.name or self._is_role_name(patch.name) and patch.id is None:
+                # Если LLM пытается создать нового персонажа с именем "Солдат 1", лучше это проигнорировать, если массовка нужна - раскомментить
+                logger.info(f"🗑️ ИГНОРИРУЕМ МАССОВКУ/РОЛЬ: {patch.name}")
+                continue
+
             if patch.id and patch.id in char_map:
                 char = char_map[patch.id]
+
                 if patch.name and patch.name != char.name:
                     if self._is_dangerous_rename(char.name, patch.name):
-                        logger.warning(f"🛡️ BLOCKED DOWNGRADE RENAME: {char.name} -> {patch.name}")
-                        # Плохое имя в алиасы, вдруг это титул
-                        if patch.name not in char.aliases:
-                            char.aliases.append(patch.name)
+                        logger.warning(f"🛡️ ЗАБЛОКИРОВАНО ПЕРЕИМЕНОВАНИЕ (Downgrade): {char.name} -> {patch.name}")
                     else:
-                        logger.info(f"♻️ RENAME APPROVED: {char.name} -> {patch.name}")
-                        if char.name not in char.aliases:
+                        logger.info(f"♻️ ПЕРЕИМЕНОВАНИЕ УТВЕРЖДЕНО: {char.name} -> {patch.name}")
+                        if char.name not in char.aliases and not self._is_role_name(char.name):
                             char.aliases.append(char.name)
                         char.name = patch.name
 
@@ -184,8 +193,9 @@ class CharacterAnalysisPipeline:
                      char.entity_type = patch.entity_type
 
                 if patch.aliases:
+                    valid_new_aliases = [a for a in patch.aliases if not self._is_role_name(a)]
                     current = set(char.aliases)
-                    new = set(patch.aliases)
+                    new = set(valid_new_aliases)
                     char.aliases = sorted(list(current.union(new)))
                     if char.name in char.aliases:
                         char.aliases.remove(char.name)
@@ -209,19 +219,20 @@ class CharacterAnalysisPipeline:
                     char.voice_timeline[chapter_id] = patch.timeline_voice_update
                 if patch.timeline_visual_update:
                     char.visual_timeline[chapter_id] = patch.timeline_visual_update
-                if patch.chapter_mentions:
-                    char.chapter_mentions.update(patch.chapter_mentions)
+                if patch.current_chapter_action:
+                    char.chapter_mentions[chapter_id] = patch.current_chapter_action
 
-            # NEW CHARACTER
             elif patch.id is None and patch.name:
+                valid_aliases = [a for a in (patch.aliases or []) if not self._is_role_name(a)]
+
                 new_char = Character(
                     name=patch.name,
                     entity_type=patch.entity_type or CharacterType.PERSON,
                     description=patch.description or "Новый персонаж.",
                     spoiler_free_description=patch.spoiler_free_description or "Новый персонаж.",
-                    aliases=patch.aliases or [],
+                    aliases=valid_aliases,
                     role_tier=patch.role_tier or "minor",
-                    chapter_mentions=patch.chapter_mentions or {},
+                    chapter_mentions={chapter_id: patch.current_chapter_action} if patch.current_chapter_action else {},
                     gender=patch.gender,
                     visual_base=patch.visual_base or ""
                 )
@@ -232,16 +243,31 @@ class CharacterAnalysisPipeline:
                     new_char.visual_timeline[chapter_id] = patch.timeline_visual_update
 
                 char_map[new_char.id] = new_char
-                logger.info(f"✨ NEW CHAR ADDED: {patch.name} ({new_char.entity_type.value})")
+                logger.info(f"✨ НОВЫЙ ПЕРСОНАЖ ДОБАВЛЕН: {patch.name} ({new_char.entity_type.value})")
 
         archive.characters = list(char_map.values())
         return archive
 
+    # --- УТИЛИТЫ СОСТОЯНИЯ ---
+
     def _is_chapter_processed(self, archive: CharacterArchive, chapter_id: str) -> bool:
+        """
+        Проверяет, обрабатывалась ли глава ранее.
+        Использует метаданные архива вместо поиска по персонажам (защита от пустых глав).
+        """
+        if hasattr(archive, 'processed_chapters'):
+            return chapter_id in archive.processed_chapters
+
         for char in archive.characters:
             if chapter_id in char.chapter_mentions:
                 return True
         return False
+
+    def _mark_chapter_processed(self, archive: CharacterArchive, chapter_id: str):
+        """Отмечает главу как обработанную."""
+        if hasattr(archive, 'processed_chapters'):
+            if chapter_id not in archive.processed_chapters:
+                archive.processed_chapters.append(chapter_id)
 
     def _filter_archive_by_ids(self, archive: CharacterArchive, ids: List[UUID]) -> List[Character]:
         id_set = set(ids)
@@ -250,5 +276,5 @@ class CharacterAnalysisPipeline:
     def _add_empty_mentions(self, archive: CharacterArchive, ids: List[UUID], chapter_id: str) -> CharacterArchive:
         for char in archive.characters:
             if char.id in ids and chapter_id not in char.chapter_mentions:
-                char.chapter_mentions[chapter_id] = "Упоминается мельком."
+                char.chapter_mentions[chapter_id] = "Упоминается мельком (без явных действий)."
         return archive

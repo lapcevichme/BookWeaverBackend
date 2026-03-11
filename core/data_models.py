@@ -1,6 +1,5 @@
 """
 Центральный модуль, определяющий все основные структуры данных проекта.
-Версия 2.1: Удален легаси AmbientTransition, добавлена поддержка Sound Design.
 """
 from __future__ import annotations
 import json
@@ -63,7 +62,7 @@ class CharacterReconResult(BaseModel):
 
 class CharacterPatch(BaseModel):
     """
-    Патч изменений для персонажа.
+    Патч изменений для персонажа. Отправляется LLM для анализа одной главы.
     """
     id: Optional[UUID] = Field(None, description="ID существующего персонажа. Если null - создается новый.")
     entity_type: Optional[CharacterType] = Field(
@@ -75,31 +74,53 @@ class CharacterPatch(BaseModel):
         description="Объяснение выбора имени. Обязательно, если меняется имя."
     )
     name: Optional[str] = Field(None, description="Каноническое (удобное) имя.")
-    role_tier: Optional[str] = None
-    description: Optional[str] = None
-    spoiler_free_description: Optional[str] = None
-    aliases: Optional[List[str]] = None
+    role_tier: Optional[str] = Field(None, description="Важность: protagonist, major, minor, background")
+
+    description: Optional[str] = Field(
+        None,
+        description="ОБЯЗАТЕЛЬНО для новых персонажей. Подробное описание: внешность, характер, профессия, предыстория."
+    )
+    spoiler_free_description: Optional[str] = Field(
+        None,
+        description="ОБЯЗАТЕЛЬНО для новых персонажей. Краткое описание роли (1-2 предложения) без спойлеров к будущим событиям."
+    )
+    aliases: Optional[List[str]] = Field(
+        None,
+        description="Список титулов, профессий, прозвищ и других имен (например: 'Евнух', 'Господин', 'Супруга', 'Служанка')."
+    )
     gender: Optional[str] = None
     visual_base: Optional[str] = Field(
         None,
         description="Базовые визуальные теги на английском (например: '1girl, red hair, green eyes, scar'). Используется как 'чертеж' для сохранения похожести."
     )
-    chapter_mentions: Optional[Dict[str, str]] = None
+
+    current_chapter_action: Optional[str] = Field(
+        None,
+        description="Кратко опиши (1-2 предложения), что именно делал или говорил этот персонаж в ТЕКУЩЕЙ анализируемой главе. Если просто упоминался, напиши 'Упоминается'."
+    )
+
     timeline_voice_update: Optional[CharacterVoiceState] = Field(
         None,
         description="Заполнить, если изменился возраст или голос."
     )
     timeline_visual_update: Optional[CharacterVisualState] = Field(
         None,
-        description="Заполнить, если изменилась внешность/одежда."
+        description="Заполнить, если персонаж активно участвует в сцене. Опиши его одежду и позу."
     )
 
     @model_validator(mode='before')
     def validate_and_fix_data(cls, values):
         if values.get('entity_type') and isinstance(values.get('entity_type'), str):
             values['entity_type'] = values['entity_type'].lower()
-        if values.get('id') is None and not values.get('name'):
-            raise ValueError("Поле 'name' является обязательным для новых персонажей.")
+
+        if values.get('id') is None:
+            if not values.get('name'):
+                raise ValueError("Поле 'name' является обязательным для новых персонажей.")
+            if not values.get('description') or len(values.get('description', '')) < 10:
+                raise ValueError("Для новых персонажей поле 'description' обязательно и должно содержать подробное описание.")
+            if not values.get('spoiler_free_description') or len(values.get('spoiler_free_description', '')) < 5:
+                raise ValueError("Для новых персонажей поле 'spoiler_free_description' обязательно.")
+
         return values
 
 
@@ -112,10 +133,10 @@ class CharacterPatchList(BaseModel):
 class RawScenarioEntry(BaseModel):
     """'Сырая' запись сценария (парсинг ответа)."""
     id: UUID = Field(default_factory=uuid4)
-    type: Literal["dialogue", "narration"]
-    speaker: str
-    text: str
-
+    type: Literal["dialogue", "narration", "thought", "image"]
+    speaker: Optional[str] = Field(None, description="Имя говорящего. Может отсутствовать для картинок.")
+    text: Optional[str] = Field(None, description="Текст реплики. Может отсутствовать для картинок.")
+    src: Optional[str] = Field(None, description="Относительный путь к файл (только для типа image).")
 
 class RawScenario(BaseModel):
     """Контейнер для 'сырого' сценария от LLM."""
@@ -196,14 +217,14 @@ class ChapterSummaryArchive(BaseModel):
 class ScenarioEntry(BaseModel):
     """Представляет одну запись (строку) в финальном сценарии."""
     id: UUID
-    type: Literal["dialogue", "narration"]
-    text: str
-    speaker: str
+    type: Literal["dialogue", "narration", "thought", "image"]
+    text: Optional[str] = None
+    speaker: Optional[str] = None
     emotion: Optional[str] = "neutral"
     ambient: str = "none"
     sfx: Optional[str] = Field(None, description="ID звукового эффекта.")
     audio_file: Optional[str] = None
-
+    src: Optional[str] = Field(None, description="Относительный путь к картинке (только для type='image').")
 
 class Scenario(BaseModel):
     """Полный сценарий для одной главы."""
@@ -255,20 +276,26 @@ class Character(BaseModel):
 class CharacterArchive(BaseModel):
     """Контейнер для хранения полного списка (архива) персонажей."""
     characters: List[Character]
+    processed_chapters: List[str] = Field(default_factory=list)
 
     def save(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
         data_to_save = self.model_dump(mode='json')
         with open(path, "w", encoding="utf-8") as f:
-            json.dump(data_to_save['characters'], f, ensure_ascii=False, indent=2)
+            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
         print(f"✅ Архив персонажей сохранен: {path}")
 
     @classmethod
     def load(cls, path: Path) -> CharacterArchive:
         if not path.exists():
             return cls(characters=[])
+
         data = json.loads(path.read_text("utf-8"))
-        return cls(characters=data)
+
+        if isinstance(data, list):
+            return cls(characters=data)
+
+        return cls(**data)
 
 
 # --- Manifest Models ---
@@ -348,10 +375,10 @@ class BookManifest(BaseModel):
 
 class LlmRawScenarioEntry(BaseModel):
     """Используется ТОЛЬКО для генерации схемы в промпте (без UUID)."""
-    type: Literal["dialogue", "narration"]
-    speaker: str
-    text: str
-
+    type: Literal["dialogue", "narration", "thought", "image"]
+    speaker: Optional[str] = None
+    text: Optional[str] = None
+    src: Optional[str] = None
 
 class LlmRawScenario(BaseModel):
     """Используется ТОЛЬКО для генерации схемы в промпте."""

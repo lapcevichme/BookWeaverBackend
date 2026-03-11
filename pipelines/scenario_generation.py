@@ -6,7 +6,6 @@ import logging
 from typing import List, Dict, Optional, Callable
 
 import config
-from core.project_context import ProjectContext
 from core.data_models import (
     CharacterArchive,
     RawScenario,
@@ -17,6 +16,7 @@ from core.data_models import (
     ChapterSummaryArchive,
     SoundDesignResult
 )
+from core.project_context import ProjectContext
 from pipelines import prompts
 from services.model_manager import ModelManager
 from utils.prompt_utils import generate_human_schema
@@ -217,10 +217,11 @@ class ScenarioGenerationPipeline:
             for entry in entries: entry['ambient'] = 'none'
             return entries
 
-        minimized_scenario = [
-            {"id": e["id"], "text": e["text"][:120] + "..." if len(e["text"]) > 120 else e["text"]}
-            for e in entries
-        ]
+        minimized_scenario = []
+        for e in entries:
+            text_content = e.get("text") or "[Иллюстрация]"
+            short_text = text_content[:120] + "..." if len(text_content) > 120 else text_content
+            minimized_scenario.append({"id": str(e["id"]), "text": short_text})
 
         ambient_menu = json.dumps(
             [{"id": a["id"], "description": a.get("description", "")} for a in self.ambient_library],

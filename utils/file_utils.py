@@ -35,6 +35,8 @@ def get_all_chapters(book_path: Path) -> list[Path]:
         return []
 
     all_chapter_paths = list(book_path.glob("vol_*/chapter_*.txt"))
+    all_chapter_paths.extend(book_path.glob("vol_*/chapter_*.md"))
+
     all_chapter_paths.sort(key=lambda p: get_natural_sort_key(str(p)))
 
     return all_chapter_paths

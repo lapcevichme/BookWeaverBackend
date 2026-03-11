@@ -168,7 +168,7 @@ class LLMService:
         """Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель."""
 
         logger.debug(
-            f"--- PROMPT SENT TO '{self.model_name}' (Provider: {self.provider}) ---\n{prompt[:200]}...\n---------------------------------")
+            f"--- PROMPT SENT TO '{self.model_name}' (Provider: {self.provider}) ---\n{prompt}...\n---------------------------------")
 
         if self.provider == "openrouter":
             return self._call_openrouter(pydantic_model, prompt)
@@ -298,7 +298,7 @@ class LLMService:
             logger.error(f"Не удалось получить ответ от модели '{self.model_name}'.")
             return None
 
-        logger.debug(f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text[:200]}...\n---------------------------------")
+        logger.debug(f"--- RAW RESPONSE FROM '{self.model_name}' ---\n{response_text}...\n---------------------------------")
 
         json_str = self._extract_json_from_response(self._sanitize_json_string(response_text))
         if not json_str:

@@ -82,7 +82,6 @@ class BookWeaverCLI:
         book_name = input("Введите название книги (имя папки): ")
         if book_name:
             print("🚀 Запускаем пайплайн генерации изображений...")
-            # Привели к общему стилю: pipeline.run(ProjectContext(...))
             ctx = ProjectContext(book_name)
             ctx.ensure_dirs()
             self.app.image_pipeline.run(ctx)

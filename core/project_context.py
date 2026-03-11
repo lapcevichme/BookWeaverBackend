@@ -31,12 +31,13 @@ class ProjectContext:
         if volume_num is not None and chapter_num is not None:
             self.chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
             self.chapter_output_dir = self.book_output_dir / self.chapter_id
-            self.chapter_file = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.txt"
+            md_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.md"
+            txt_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.txt"
+            self.chapter_file = md_path if md_path.exists() else txt_path
             self.scenario_file = self.chapter_output_dir / "scenario.json"
             self.subtitles_file = self.chapter_output_dir / "subtitles.json"
             self.chapter_audio_dir = self.chapter_output_dir / "audio"
 
-            # Пути к кэш-файлам для отказоустойчивости
             self.raw_scenario_cache_file = self.chapter_output_dir / "cache_raw_scenario.json"
             self.ambient_cache_file = self.chapter_output_dir / "cache_ambient.json"
             # TODO: и это кэшировать
@@ -140,4 +141,7 @@ class ProjectContext:
         """
         Конструирует и возвращает путь к текстовому файлу главы.
         """
+        md_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.md"
+        if md_path.exists():
+            return md_path
         return self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.txt"
