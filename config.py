@@ -30,7 +30,8 @@ PRONUNCIATION_DICT_FILE = ASSETS_DIR / "pronunciation_dictionary.json"
 AMBIENT_LIBRARY_FILE = ASSETS_DIR / "ambient_library.json"
 EMOTION_REFERENCE_LIBRARY_FILE = ASSETS_DIR / "emotion_reference_library.json"
 SFX_LIBRARY_FILE = ASSETS_DIR / "sfx_library.json"
-COMFY_WORKFLOW_FILE = ASSETS_DIR / "comfy_workflow.json"
+COMFY_WORKFLOW_FAST = Path("workflow_fast.json")
+COMFY_WORKFLOW_HQ = Path("workflow_hq.json")
 VOICES_DIR = STORAGE_DIR / "voices"
 
 # --- EXTERNAL SERVICES ---
@@ -53,9 +54,9 @@ COMFY_DEFAULT_WIDTH = 512
 COMFY_DEFAULT_HEIGHT = 768
 COMFY_NODE_MAPPING = {
     "positive_prompt_node_id": "3",
-    # "negative_prompt_node_id": "4",
-    # "ksampler_node_id": "6",
-    # "empty_latent_node_id": "5",
+    "negative_prompt_node_id": "4",
+    "empty_latent_node_id": "5",
+    "ksampler_node_id": "6"
 }
 
 # TTS

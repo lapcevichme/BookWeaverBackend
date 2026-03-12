@@ -15,10 +15,10 @@ class ImageGenerationPipeline:
         self.comfy_service = ComfyService()
         logger.info("✅ Пайплайн ImageGenerationPipeline инициализирован.")
 
-    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
+    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None, quality: str = "fast"):
         """
-        Проходит по архиву персонажей и генерирует изображения для тех таймлайнов,
-        где есть image_prompt, но нет reference_image_path.
+        Проходит по архиву персонажей и генерирует изображения.
+        Параметр `quality` может быть "fast" (быстрые скетчи) или "hq" (детализированные).
         """
         def update_progress(progress: float, stage: str, message: str):
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
@@ -49,26 +49,35 @@ class ImageGenerationPipeline:
             update_progress(1.0, "Готово", "Нет новых задач для генерации изображений.")
             return
 
-        update_progress(0.05, "Генерация", f"Найдено {total_tasks} задач на генерацию.")
+        update_progress(0.05, "Генерация", f"Найдено {total_tasks} задач. Режим: {quality.upper()}")
 
         generated_count = 0
+        pony_quality_tags = "score_9, score_8_up, score_7_up, score_6_up, source_anime, "
+        pony_negative = "ugly, bad quality, blurry, score_6, score_5, score_4"
 
         for i, task in enumerate(tasks):
             char_name = task['char_name']
-            prompt = task['prompt']
+
+            prompt = pony_quality_tags + task['prompt']
+
+            if quality == "fast":
+                prompt += ", crisp lines, smooth shading, masterpiece"
 
             progress_val = 0.05 + (i / total_tasks) * 0.9
-            update_progress(progress_val, "Генерация", f"Генерация: {char_name} ({task['chapter']})...")
+            update_progress(progress_val, "Генерация", f"[{quality.upper()}] {char_name} ({task['chapter']})...")
 
             try:
-                # Отправка в очередь
-                prompt_id = self.comfy_service.queue_prompt(prompt, width=512, height=768)
+                prompt_id = self.comfy_service.queue_prompt(
+                    prompt=prompt,
+                    negative=pony_negative,
+                    width=832,
+                    height=1216,
+                    quality=quality
+                )
 
-                # Ожидание
                 outputs = self.comfy_service.wait_for_generation(prompt_id)
 
                 if outputs:
-                    # Сохранение
                     for node_id, node_data in outputs.items():
                         if 'images' in node_data:
                             img_info = node_data['images'][0]

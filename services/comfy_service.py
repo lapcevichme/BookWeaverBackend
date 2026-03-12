@@ -15,25 +15,27 @@ logger = logging.getLogger(__name__)
 class ComfyService:
     """
     Сервис для взаимодействия с ComfyUI API.
-    Работает в режиме 'Умного JSON': подменяет только те параметры,
-    которые явно указаны в config.COMFY_NODE_MAPPING.
+    Поддерживает мульти-шаблоны (fast / hq).
     """
 
     def __init__(self):
         self.server_address = config.COMFY_SERVER_ADDRESS
         self.client_id = str(uuid.uuid4())
-        self.workflow_template = self._load_workflow_template()
 
-    def _load_workflow_template(self) -> Dict:
-        """Загружает базовый шаблон workflow из файла."""
-        path = config.COMFY_WORKFLOW_FILE
+        self.templates = {
+            "fast": self._load_workflow_template(getattr(config, 'COMFY_WORKFLOW_FAST', Path("workflow_fast.json"))),
+            "hq": self._load_workflow_template(getattr(config, 'COMFY_WORKFLOW_HQ', Path("workflow_hq.json")))
+        }
+
+    def _load_workflow_template(self, path: Path) -> Dict:
+        """Загружает шаблон workflow из указанного файла."""
         if not path.exists():
             logger.error(f"❌ Файл ComfyUI workflow не найден: {path}")
             return {}
         try:
             return json.loads(path.read_text("utf-8"))
         except Exception as e:
-            logger.error(f"❌ Ошибка чтения JSON workflow: {e}")
+            logger.error(f"❌ Ошибка чтения JSON workflow {path}: {e}")
             return {}
 
     def is_reachable(self) -> bool:
@@ -44,14 +46,20 @@ class ComfyService:
         except Exception:
             return False
 
-    def _prepare_workflow(self, prompt: str, negative: str, seed: int, width: int, height: int) -> Dict:
+    def _prepare_workflow(self, prompt: str, negative: str, seed: int, width: int, height: int,
+                          quality: str = "fast") -> Dict:
         """
-        Берет шаблон и подставляет в него значения ТОЛЬКО если для них задан ID в конфиге.
+        Берет нужный шаблон и подставляет значения по ID из конфига.
         """
-        if not self.workflow_template:
-            raise FileNotFoundError("Шаблон workflow не загружен. Проверьте путь в config.py")
+        template = self.templates.get(quality)
+        if not template:
+            logger.warning(f"Шаблон '{quality}' не найден, используется 'fast' по умолчанию.")
+            template = self.templates.get("fast")
 
-        workflow = copy.deepcopy(self.workflow_template)
+        if not template:
+            raise FileNotFoundError("Шаблоны workflow не загружены. Проверьте пути в config.py")
+
+        workflow = copy.deepcopy(template)
         mapping = config.COMFY_NODE_MAPPING or {}
 
         # Позитивный промпт
@@ -81,18 +89,17 @@ class ComfyService:
 
         return workflow
 
-    def queue_prompt(self, prompt: str, negative: str = "ugly, bad quality, blur",
-                     width: int = config.COMFY_DEFAULT_WIDTH,
-                     height: int = config.COMFY_DEFAULT_HEIGHT) -> str:
+    def queue_prompt(self, prompt: str, negative: str = "ugly, bad quality, blurry, score_6, score_5, score_4",
+                     width: int = 832, height: int = 1216, quality: str = "fast") -> str:
         """
         Отправляет задачу в ComfyUI. Возвращает prompt_id.
         """
         seed = int(uuid.uuid4().int % 1000000000)
 
-        logger.info(f"🎨 Подготовка workflow (Seed: {seed})...")
+        logger.info(f"🎨 Подготовка workflow (Quality: {quality}, Seed: {seed})...")
 
         try:
-            workflow = self._prepare_workflow(prompt, negative, seed, width, height)
+            workflow = self._prepare_workflow(prompt, negative, seed, width, height, quality)
         except Exception as e:
             logger.error(f"Ошибка подготовки workflow: {e}")
             raise
@@ -109,10 +116,7 @@ class ComfyService:
             raise e
 
     def wait_for_generation(self, prompt_id: str, timeout: int = 300) -> Optional[Dict]:
-        """
-        Блокирующее ожидание завершения генерации.
-        Timeout увеличен до 600 секунд (10 минут).
-        """
+        """Блокирующее ожидание завершения генерации."""
         start_time = time.time()
         last_log_time = start_time
 
