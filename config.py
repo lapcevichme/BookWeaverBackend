@@ -6,7 +6,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).parent.resolve()
 
-# --- INPUT / OUTPUT ---
+# Input / Output
 INPUT_DIR = BASE_DIR / "input"
 OUTPUT_DIR = BASE_DIR / "output"
 EXPORT_DIR = BASE_DIR / "export"
@@ -18,12 +18,12 @@ BOOKS_DIR_NAME = "books"
 RAW_AUDIO_DIR = INPUT_DIR / "raw_audio"
 RAW_TEXT_DIR = INPUT_DIR / "raw_text"
 
-# --- LOGGING ---
+# Logging
 LOGS_DIR = BASE_DIR / "logs"
 LOG_FILE_NAME = "bookweaver.log"
 LOG_FILE_PATH = LOGS_DIR / LOG_FILE_NAME
 
-# --- ASSETS ---
+# Assets
 ASSETS_DIR = BASE_DIR / "assets"
 AMBIENT_DIR = ASSETS_DIR / "ambient"
 PRONUNCIATION_DICT_FILE = ASSETS_DIR / "pronunciation_dictionary.json"
@@ -34,7 +34,7 @@ COMFY_WORKFLOW_FAST = Path("workflow_fast.json")
 COMFY_WORKFLOW_HQ = Path("workflow_hq.json")
 VOICES_DIR = STORAGE_DIR / "voices"
 
-# --- EXTERNAL SERVICES ---
+# Api (Deprecated)
 SERVER_PORT = int(os.environ.get("SERVER_PORT", 8080))
 
 # LLM Settings

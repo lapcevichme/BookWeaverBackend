@@ -45,7 +45,8 @@ class BookExporter:
         if self.context.cover_file.exists():
             shutil.copy2(self.context.cover_file, self.temp_build_dir / self.context.cover_file.name)
 
-        source_images_dir = self.context.book_dir / "images"
+        # ИСПРАВЛЕНИЕ: Берем картинки из сгенерированной директории (из output, а не из input)
+        source_images_dir = self.context.images_dir
         if source_images_dir.exists() and source_images_dir.is_dir():
             dest_images_dir = self.temp_build_dir / "content" / "images"
             shutil.copytree(source_images_dir, dest_images_dir, dirs_exist_ok=True)
@@ -85,6 +86,7 @@ class BookExporter:
                 shutil.copy2(self.context.character_archive_file, self.temp_build_dir / "characters.json")
 
             used_ambients = set()
+            successful_chapters = set()  # ИСПРАВЛЕНИЕ: Отслеживаем успешно экспортированные главы
             total_book_duration = 0
 
             content_dir = self.temp_build_dir / "content"
@@ -100,16 +102,19 @@ class BookExporter:
                 logger.info(f" -> Глава: {cid}")
 
                 chapter_out_dir = content_dir / cid
-                chapter_out_dir.mkdir()
 
                 scenario = chapter_ctx.load_scenario()
                 if not scenario:
                     logger.warning(f"Сценарий для {cid} не найден. Пропуск.")
                     continue
 
+                # Создаем папку главы только если убедились, что есть сценарий
+                chapter_out_dir.mkdir(exist_ok=True)
+
                 for entry in scenario.entries:
                     if entry.ambient and entry.ambient != "none":
                         used_ambients.add(entry.ambient)
+                    # SFX пока осознанно игнорируем
 
                 subtitles_map = {}
                 if chapter_ctx.subtitles_file.exists():
@@ -140,19 +145,40 @@ class BookExporter:
 
                 total_book_duration += duration_ms
 
+                try:
+                    raw_chapter_text = chapter_ctx.get_chapter_text()
+                except Exception:
+                    raw_chapter_text = ""
+
                 chapter_data = {
                     "id": cid,
                     "duration_ms": duration_ms,
                     "scenario": scenario.model_dump(mode='json'),
-                    "sync_map": sync_map
+                    "sync_map": sync_map,
+                    "raw_text": raw_chapter_text
                 }
+
                 (chapter_out_dir / "data.json").write_text(
                     json.dumps(chapter_data, ensure_ascii=False, indent=2), encoding='utf-8'
                 )
 
+                successful_chapters.add(cid)
+
             manifest.meta.total_duration_ms = total_book_duration
+
+            # ИСПРАВЛЕНИЕ: Актуализируем имя файла обложки в метаданных
+            if self.context.cover_file.exists():
+                manifest.meta.cover_image = self.context.cover_file.name
+
+            # ИСПРАВЛЕНИЕ: Обновляем пути в структуре только для тех глав, которые реально собрались
             for ch in manifest.structure:
-                ch.path = f"content/{ch.id}/data.json"  # Путь для плеера
+                if ch.id in successful_chapters:
+                    ch.path = f"content/{ch.id}/data.json"  # Путь для плеера
+                    ch.status = "exported"
+                else:
+                    ch.path = None  # Защищаем плеер от попытки прочитать несуществующий файл
+                    if ch.status == "exported":
+                        ch.status = "draft"  # Сбрасываем статус, если глава исчезла
 
             self._write_json(manifest.model_dump(mode='json'), "manifest.json")
 

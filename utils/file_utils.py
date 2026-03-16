@@ -5,7 +5,7 @@ from typing import Tuple
 
 def get_natural_sort_key(filename: str) -> list:
     """
-    Создает ключ для "естественной" сортировки строк с числами.
+    Создает ключ для сортировки строк с числами.
     'item_10' идет после 'item_2', а не перед.
     """
     parts = re.split(r'(\d+)', filename)

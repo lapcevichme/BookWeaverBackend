@@ -1,6 +1,6 @@
 """
-Главный класс приложения (Facade), объединяющий все подсистемы:
-Импорт -> Пайплайны (AI) -> Экспорт.
+Точка входа в приложение
+Импорт -> Пайплайны -> Экспорт.
 """
 import logging
 import os
@@ -37,18 +37,17 @@ class Application:
         self._initialize_pipelines()
 
     def _initialize_pipelines(self):
-        """Инициализирует все AI-пайплайны."""
-        logger.info("🔧 Инициализация AI-пайплайнов...")
+        logger.info("Инициализация AI-пайплайнов...")
         self.character_pipeline = CharacterAnalysisPipeline(self.model_manager)
         self.scenario_pipeline = ScenarioGenerationPipeline(self.model_manager)
         self.summary_pipeline = SummaryGenerationPipeline(self.model_manager)
         self.tts_pipeline = TTSPipeline(self.model_manager)
         self.image_pipeline = ImageGenerationPipeline()
 
-        logger.info("✅ Пайплайны готовы к работе.")
+        logger.info("Пайплайны готовы к работе.")
 
     def import_book(self, file_path: Path) -> str:
-        logger.info(f"📚 Запуск импорта книги: {file_path}")
+        logger.info(f"Запуск импорта книги: {file_path}")
         converter = BookConverter(file_path)
         converter.run()
         return converter.book_name
@@ -61,25 +60,21 @@ class Application:
         """
         Запускает последовательную генерацию: Саммари -> Персонажи -> Сценарии.
         """
-        logger.info(f"🚀 Запуск полного цикла генерации для: {book_name}")
+        logger.info(f"Запуск полного цикла генерации для: {book_name}")
         ctx_book = ProjectContext(book_name)
 
-        # 1: Саммари
         if not skip_summary:
             logger.info("\n=== ЭТАП 1: ГЕНЕРАЦИЯ ПЕРЕСКАЗОВ ===")
             self.summary_pipeline.run(ctx_book)
 
-        # 2: Персонажи (нужны для ролей в сценариях)
         if not skip_chars:
             logger.info("\n=== ЭТАП 2: АНАЛИЗ ПЕРСОНАЖЕЙ ===")
             self.character_pipeline.run(book_name)
 
-        # 2.5: Иллюстрации (Опционально)
         if generate_images:
             logger.info("\n=== ЭТАП 2.5: ГЕНЕРАЦИЯ ИЛЛЮСТРАЦИЙ (ComfyUI) ===")
             self.image_pipeline.run(ctx_book)
 
-        # 3: Сценарии
         if not skip_scenario:
             logger.info("\n=== ЭТАП 3: ГЕНЕРАЦИЯ СЦЕНАРИЕВ ===")
             chapters = ctx_book.get_ordered_chapters()
@@ -87,15 +82,15 @@ class Application:
 
             for i, (vol, chap) in enumerate(chapters, 1):
                 chapter_ctx = ProjectContext(book_name, vol, chap)
-                logger.info(f"🎬 Глава [{i}/{total}]: {chapter_ctx.chapter_id}")
+                logger.info(f"Глава [{i}/{total}]: {chapter_ctx.chapter_id}")
                 try:
                     self.scenario_pipeline.run(chapter_ctx)
                 except Exception as e:
-                    logger.error(f"❌ Ошибка в главе {chapter_ctx.chapter_id}: {e}")
+                    logger.error(f"Ошибка в главе {chapter_ctx.chapter_id}: {e}")
 
-        logger.info(f"\n✨ Полный цикл для '{book_name}' завершен!")
+        logger.info(f"\nПолный цикл для '{book_name}' завершен!")
 
     def export_book(self, book_name: str) -> Optional[Path]:
-        logger.info(f"📦 Запуск экспорта для: {book_name}")
+        logger.info(f"Запуск экспорта для: {book_name}")
         exporter = BookExporter(book_name)
         return exporter.export()

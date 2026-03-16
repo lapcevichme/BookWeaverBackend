@@ -3,6 +3,7 @@ import sys
 from logging.handlers import RotatingFileHandler
 import config
 
+# FIXME: Когда переполняется файл логов, название идет формата "*.log.{num}"
 def setup_logging():
     """
     Настраивает систему логирования для всего приложения.
@@ -35,4 +36,4 @@ def setup_logging():
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("PIL").setLevel(logging.WARNING)
 
-    logging.info(f"✅ Система логирования настроена. Лог: {config.LOG_FILE_PATH}")
+    logging.info(f"Система логирования настроена. Лог: {config.LOG_FILE_PATH}")

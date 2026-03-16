@@ -1,6 +1,5 @@
 """
 Файл для запуска BookWeaver в режиме командной строки (CLI).
-Универсальный интерфейс для управления проектами.
 """
 import logging
 import os
@@ -29,17 +28,17 @@ class BookWeaverCLI:
         file_path = Path(path_str)
 
         if not file_path.exists():
-            print(f"❌ Файл не найден: {file_path}")
+            print(f"Файл не найден: {file_path}")
             return
 
         try:
             book_name = self.app.import_book(file_path)
-            print(f"✅ Книга успешно импортирована! ID проекта: '{book_name}'")
+            print(f"Книга успешно импортирована! ID проекта: '{book_name}'")
         except Exception as e:
-            print(f"❌ Ошибка импорта: {e}")
+            print(f"Ошибка импорта: {e}")
 
     def run_full_generation(self):
-        print("\n--- Полный цикл генерации (Auto-Pilot) ---")
+        print("\n--- Полный цикл генерации ---")
         book_name = input("Введите название книги (имя папки): ")
         if not book_name: return
 
@@ -49,7 +48,7 @@ class BookWeaverCLI:
 
         gen_img = False
         if not skip_char:
-             gen_img = input("2.5. Генерировать иллюстрации (ComfyUI)? (y/n): ").lower() == 'y'
+             gen_img = input("2.5. Генерировать иллюстрации? (y/n): ").lower() == 'y'
 
         skip_scen = input("3. Сценарии? ") == '-'
 
@@ -62,10 +61,10 @@ class BookWeaverCLI:
 
         archive_path = self.app.export_book(book_name)
         if archive_path:
-            print(f"🎉 Архив готов: {archive_path}")
-            print(f"📂 Папка экспорта: {archive_path.parent}")
+            print(f"Архив готов: {archive_path}")
+            print(f"Папка экспорта: {archive_path.parent}")
         else:
-            print("❌ Экспорт не удался (см. логи).")
+            print("Экспорт не удался (см. логи).")
 
     def run_character_analysis(self):
         book_name = input("Введите название книги (имя папки): ")
@@ -76,12 +75,9 @@ class BookWeaverCLI:
         if book_name: self.app.summary_pipeline.run(ProjectContext(book_name))
 
     def run_image_generation(self):
-        """
-        Запускает генерацию картинок.
-        """
         book_name = input("Введите название книги (имя папки): ")
         if book_name:
-            print("🚀 Запускаем пайплайн генерации изображений...")
+            print("Запускаем пайплайн генерации изображений...")
             ctx = ProjectContext(book_name)
             ctx.ensure_dirs()
             self.app.image_pipeline.run(ctx)
@@ -111,19 +107,19 @@ class BookWeaverCLI:
             print("\n" + "=" * 60)
             print("BOOKWEAVER CLI v2.1")
             print("=" * 60)
-            print("📁 ПРОЕКТ:")
+            print("ПРОЕКТ:")
             print("  1. Импорт книги (из файла)")
             print("  2. Экспорт книги (в .bw)")
             print("-" * 20)
-            print("🤖 АВТОПИЛОТ:")
+            print("АВТО:")
             print("  3. Полный цикл генерации (Саммари -> Персы -> [Img] -> Сценарии)")
             print("-" * 20)
-            print("🛠 РУЧНОЕ УПРАВЛЕНИЕ:")
+            print("РУЧНОЕ УПРАВЛЕНИЕ:")
             print("  4. Анализ персонажей (отдельно)")
             print("  5. Генерация саммари (отдельно)")
             print("  6. Генерация сценария главы (отдельно)")
-            print("  7. Синтез речи (TTS) главы")
-            print("  8. Генерация иллюстраций (ComfyUI) [BETA]")
+            print("  7. TTS главы")
+            print("  8. Генерация иллюстраций (ComfyUI) [UNSTABLE]")
             print("-" * 20)
             print("0. Выход")
             print("=" * 60)
