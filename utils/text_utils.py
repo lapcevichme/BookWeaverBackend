@@ -1,10 +1,9 @@
+# TODO: Найти библиотеки которые нормально все эти функции выполняют
 import json
-import re
 from pathlib import Path
-from typing import List
-
 
 # TODO: рассмотреть, насколько сейчас нужен этот метод. Раньше были проблемы с TXT, но при переходе на epub и парсинг с моей стороны это, похоже, бесполезно
+# UPD: 100% есть либа которая делает все это
 def cleanup_filename(name: str) -> str:
     """
     Очищает строку, чтобы ее можно было безопасно использовать в качестве имени файла.
@@ -23,14 +22,19 @@ def cleanup_filename(name: str) -> str:
 
 
 def load_pronunciation_dictionary(path: Path) -> dict:
-    """Загружает словарь произношений из JSON файла."""
+    """
+    Загружает словарь произношений из JSON файла.
+    Не работает для CosyVoice, модель под капотом слишком упрямая.
+    TODO: Найти способ* как для него ставить ударения (*Уничтожить TTS)
+    """
     if not path.exists():
         return {}
     with open(path, 'r', encoding='utf-8') as f:
         return json.load(f)
 
 
-# TODO: при переходе на cosy voice посмотреть где возникают артифакты и пофиксить некоторые из них
+# TODO: при переходе на cosy voice посмотреть где возникают артефакты и пофиксить некоторые из них
+# WONTFIX: Я без понятия как появляются вообще артефакты у этой модели. Она иногда генерируется один и тот же текст на разные промпты
 def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
     """
     Полный конвейер предобработки текста для TTS:
@@ -53,12 +57,12 @@ from typing import List
 
 def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> List[str]:
     """
-    Разбивает текст на чанки, стараясь не разрывать абзацы.
+    Разбивает текст на чанки, стараясь не разрывать абзацы. Если бьет абзац, то делает overlap
 
     Args:
         text: Исходный текст.
-        chunk_size: Максимальный размер чанка (рекомендуется 6000-12000 для корректной работы с JSON).
-        overlap: Размер перекрытия из конца предыдущего чанка для сохранения контекста.
+        chunk_size: Максимальный размер чанка (6000-12000 для нормальной работы с JSON).
+        overlap: Размер перекрытия из конца предыдущего чанка для сохранения контекста (Не тестировал лучший размер).
     """
     if not text:
         return []
@@ -66,7 +70,6 @@ def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> 
     if len(text) <= chunk_size:
         return [text]
 
-    # Пробуем разбиение по абзацам (двойной перенос), иначе по строкам
     paragraphs = re.split(r'\n\s*\n', text)
     if not paragraphs:
         paragraphs = text.split('\n')
@@ -84,7 +87,6 @@ def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> 
                 current_chunk = []
                 current_length = 0
 
-            # Разбиваем сверхбольшой параграф на части
             sub_chunks = [para[i:i + chunk_size] for i in range(0, len(para), chunk_size)]
             chunks.extend(sub_chunks)
             continue
@@ -93,9 +95,8 @@ def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> 
             full_chunk_text = "\n\n".join(current_chunk)
             chunks.append(full_chunk_text)
 
-            # Формирование перекрытия для сохранения контекста LLM
             overlap_text = ""
-            if overlap > 0 and len(full_chunk_text) > overlap:
+            if 0 < overlap < len(full_chunk_text):
                 overlap_text = f"...{full_chunk_text[-overlap:]}\n--- (контекст) ---\n"
 
             current_chunk = [overlap_text + para]

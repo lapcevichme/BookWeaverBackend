@@ -14,20 +14,19 @@ def init_manifest(
         metadata: Optional[Dict[str, Any]] = None
 ):
     """
-    Создает manifest.json.
-    Строгий режим: старые невалидные манифесты игнорируются.
+    Создает manifest.json, представляешь?
     """
     if metadata is None:
         metadata = {}
 
-    logger.info(f"🏁 ЗАПУСК ИНИЦИАЛИЗАЦИИ МАНИФЕСТА: '{book_name}'")
+    logger.info(f"ЗАПУСК ИНИЦИАЛИЗАЦИИ МАНИФЕСТА: '{book_name}'")
 
     context = ProjectContext(book_name=book_name)
     book_src_dir = context.book_dir
     manifest_path = context.manifest_file
 
     if not book_src_dir.exists():
-        logger.error(f"❌ ПАПКА НЕ НАЙДЕНА: {book_src_dir}")
+        logger.error(f"ПАПКА НЕ НАЙДЕНА: {book_src_dir}")
         return
 
     context.book_output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,14 +60,15 @@ def init_manifest(
 
     old_manifest = None
     if manifest_path.exists():
-        logger.info("📂 Обнаружен существующий manifest.json")
+        logger.info("Обнаружен существующий manifest.json")
         try:
             old_manifest = BookManifest.load(manifest_path)
-            logger.info("✅ Старый манифест валиден. Данные будут объединены.")
+            logger.info("Старый манифест валиден. Данные будут объединены.")
         except Exception:
-            logger.warning("⚠️ СТАРЫЙ МАНИФЕСТ НЕСОВМЕСТИМ (LEGACY). ОН БУДЕТ ПЕРЕЗАПИСАН.")
+            logger.warning("СТАРЫЙ МАНИФЕСТ НЕСОВМЕСТИМ. ОН БУДЕТ ПЕРЕЗАПИСАН.")
             old_manifest = None
 
+    # FIXME: Тут incorrect call, я не понимаю почему :cry:
     old_meta = old_manifest.meta if old_manifest else ManifestMeta()
 
     final_meta = ManifestMeta(
@@ -97,7 +97,7 @@ def init_manifest(
 
     new_manifest.save(manifest_path)
 
-    logger.info(f"💾 МАНИФЕСТ ОБНОВЛЕН: {final_meta.title} ({len(structure_entries)} глав)")
+    logger.info(f"МАНИФЕСТ ОБНОВЛЕН: {final_meta.title} ({len(structure_entries)} глав)")
 
 
 if __name__ == "__main__":
