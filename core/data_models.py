@@ -40,8 +40,7 @@ class CharacterVisualState(BaseModel):
     """
     description: str = Field(..., description="Общее описание внешности и одежды в этой главе.")
     image_prompt: Optional[str] = Field(None, description="Готовый промпт для генерации (на английском, для SD).")
-    reference_image_path: Optional[str] = Field(None,
-                                                description="Путь к сгенерированному референсу (заполняется системой).")
+    reference_image_path: Optional[str] = Field(None, description="Путь к сгенерированному референсу.")
 
 
 # --- Analysis & Patching Models ---
@@ -117,10 +116,9 @@ class CharacterPatch(BaseModel):
             if not values.get('name'):
                 raise ValueError("Поле 'name' является обязательным для новых персонажей.")
             if not values.get('description') or len(values.get('description', '')) < 10:
-                raise ValueError("Для новых персонажей поле 'description' обязательно и должно содержать подробное описание.")
+                raise ValueError("Для новых персонажей поле 'description' обязательно.")
             if not values.get('spoiler_free_description') or len(values.get('spoiler_free_description', '')) < 5:
                 raise ValueError("Для новых персонажей поле 'spoiler_free_description' обязательно.")
-
         return values
 
 
@@ -134,24 +132,24 @@ class RawScenarioEntry(BaseModel):
     """'Сырая' запись сценария (парсинг ответа)."""
     id: UUID = Field(default_factory=uuid4)
     type: Literal["dialogue", "narration", "thought", "image"]
-    speaker: Optional[str] = Field(None, description="Имя говорящего. Может отсутствовать для картинок.")
-    text: Optional[str] = Field(None, description="Текст реплики. Может отсутствовать для картинок.")
-    src: Optional[str] = Field(None, description="Относительный путь к файл (только для типа image).")
+    speaker: Optional[str] = Field(None, description="Имя говорящего.")
+    text: Optional[str] = Field(None, description="Текст реплики.")
+    src: Optional[str] = Field(None, description="Относительный путь к файл (только для типа image). Если картинки нет, НЕ СОЗДАВАЙ ЭТО ПОЛЕ")
 
 class RawScenario(BaseModel):
     """Контейнер для 'сырого' сценария от LLM."""
     scenario: List[RawScenarioEntry]
 
 
-# --- Sound Design Models (NEW) ---
+# --- Sound Design Models ---
 
 class SoundDesignItem(BaseModel):
     """
     Результат работы звукорежиссера для одной записи сценария.
     """
     entry_id: str = Field(description="ID записи сценария.")
-    ambient: Optional[str] = Field(None, description="ID фонового звука или 'none'.")
-    sfx: Optional[str] = Field(None, description="ID точечного звукового эффекта.")
+    ambient: Optional[str] = Field(None, description="ID фонового звука. Если 'none' - ВООБЩЕ НЕ ВЫВОДИ поле.")
+    sfx: Optional[str] = Field(None, description="ID звукового эффекта. Если нет - ВООБЩЕ НЕ ВЫВОДИ поле.")
 
 
 class SoundDesignResult(BaseModel):
@@ -174,20 +172,15 @@ class RawChapterSummary(BaseModel):
 
 
 class ChapterSummary(BaseModel):
-    """
-    Хранит два вида пересказа для одной главы.
-    """
+    """Хранит два вида пересказа для одной главы."""
     chapter_id: str = Field(description="Уникальный идентификатор главы, например 'vol_1_chap_1'.")
-    teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
-    synopsis: str = Field(
-        description="Детальный (100-150 слов) конспект для внутреннего использования и для пользователя, чтобы освежить память. СОДЕРЖИТ все ключевые события и спойлеры.")
-
+    teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер.")
+    synopsis: str = Field(description="Детальный (100-150 слов) конспект.")
 
 class VolumeSummary(BaseModel):
     """Глобальный пересказ целого тома."""
     volume_num: int
     summary: str = Field(description="Сжатый пересказ событий всего тома.")
-
 
 class ChapterSummaryArchive(BaseModel):
     summaries: Dict[str, ChapterSummary] = Field(default_factory=dict)
@@ -219,12 +212,13 @@ class ScenarioEntry(BaseModel):
     id: UUID
     type: Literal["dialogue", "narration", "thought", "image"]
     text: Optional[str] = None
+    tts_text: Optional[str] = None
     speaker: Optional[str] = None
-    emotion: Optional[str] = "neutral"
+    instruct_prompt: str = Field("neutral")
     ambient: str = "none"
-    sfx: Optional[str] = Field(None, description="ID звукового эффекта.")
+    sfx: Optional[str] = None
     audio_file: Optional[str] = None
-    src: Optional[str] = Field(None, description="Относительный путь к картинке (только для type='image').")
+    src: Optional[str] = None
 
 class Scenario(BaseModel):
     """Полный сценарий для одной главы."""
@@ -289,12 +283,9 @@ class CharacterArchive(BaseModel):
     def load(cls, path: Path) -> CharacterArchive:
         if not path.exists():
             return cls(characters=[])
-
         data = json.loads(path.read_text("utf-8"))
-
         if isinstance(data, list):
             return cls(characters=data)
-
         return cls(**data)
 
 
@@ -310,9 +301,8 @@ class ManifestMeta(BaseModel):
     status: str = "ongoing"
     version: str = "1.0"
     total_duration_ms: int = 0
-    cover_image: Optional[str] = Field(None, description="Имя файла обложки (например, cover.jpg)")
-    language: str = Field("ru", description="Код языка книги (ru, en, jp и т.д.)")
-
+    cover_image: Optional[str] = Field(None)
+    language: str = Field("ru")
 
 class ManifestChapterEntry(BaseModel):
     """Одна запись в оглавлении (ToC)."""
@@ -337,7 +327,6 @@ class ManifestChapterEntry(BaseModel):
             self.src_dir = canonical_id
         return self
 
-
 class ManifestConfig(BaseModel):
     """Технические настройки генерации (для бэкенда)."""
     notes: Optional[str] = None
@@ -345,11 +334,8 @@ class ManifestConfig(BaseModel):
     default_narrator_voice: str = "narrator_default"
     character_voices: Dict[UUID, str] = Field(default_factory=dict)
 
-
 class BookManifest(BaseModel):
-    """
-    Корневой манифест проекта (V2).
-    """
+    """Корневой манифест проекта (V2)."""
     project_id: str
     meta: ManifestMeta
     structure: List[ManifestChapterEntry] = Field(default_factory=list)
@@ -363,13 +349,11 @@ class BookManifest(BaseModel):
     def load(cls, path: Path) -> BookManifest:
         if not path.exists():
             raise FileNotFoundError(f"Манифест не найден: {path}. Запустите импорт книги!")
-
         try:
             return cls.model_validate_json(path.read_text("utf-8"))
         except ValidationError as e:
-            print(f"🛑 ОШИБКА ВАЛИДАЦИИ МАНИФЕСТА: {e}")
+            print(f"ОШИБКА ВАЛИДАЦИИ МАНИФЕСТА: {e}")
             raise
-
 
 # --- Display/Prompt Helpers ---
 
@@ -378,7 +362,7 @@ class LlmRawScenarioEntry(BaseModel):
     type: Literal["dialogue", "narration", "thought", "image"]
     speaker: Optional[str] = None
     text: Optional[str] = None
-    src: Optional[str] = None
+    src: Optional[str] = Field(None, description="Если это не image, ВООБЩЕ НЕ ВЫВОДИ ключ src")
 
 class LlmRawScenario(BaseModel):
     """Используется ТОЛЬКО для генерации схемы в промпте."""
