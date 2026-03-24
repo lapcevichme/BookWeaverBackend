@@ -15,7 +15,7 @@ def merge_chapter_audio(
 ) -> Tuple[int, List[dict]]:
     """
     Склеивает аудиофайлы главы в один большой файл и создает карту синхронизации.
-    Работает с форматом: {entry.id}.wav
+    Корректно обрабатывает новые типы данных, включая 'image' (без поиска аудио).
     """
 
     if subtitles_map is None:
@@ -35,6 +35,24 @@ def merge_chapter_audio(
     for i, entry in enumerate(scenario.entries):
         eid = str(entry.id)
 
+        instruct = getattr(entry, 'instruct_prompt', 'neutral')
+
+        sync_item = {
+            "id": eid,
+            "text": entry.text,
+            "speaker": entry.speaker,
+            "type": entry.type,
+            "emotion": instruct, # В мапе синхронизации оставляем ключ emotion для совместимости с фронтендом. TODO: Придумать что с фронтом делать
+            "ambient": entry.ambient if entry.ambient else "none",
+        }
+
+        if entry.type == "image":
+            sync_item["src"] = entry.src
+            sync_item["start_ms"] = current_offset_ms
+            sync_item["end_ms"] = current_offset_ms
+            sync_map.append(sync_item)
+            continue
+
         audio_filename = f"{eid}.wav"
         file_path = audio_dir / audio_filename
 
@@ -46,8 +64,11 @@ def merge_chapter_audio(
                 segment_duration = len(segment)
                 combined_audio += segment
 
+                # Тишина после сегмента, если это не последний элемент и не картинка
                 if gap_ms > 0 and i < len(scenario.entries) - 1:
-                    combined_audio += silence
+                    next_entry = scenario.entries[i + 1]
+                    if next_entry.type != "image":
+                        combined_audio += silence
 
             except Exception as e:
                 logger.error(f"Ошибка обработки аудиофайла {file_path.name}: {e}")
@@ -59,17 +80,10 @@ def merge_chapter_audio(
         entry_start = current_offset_ms
         entry_end = current_offset_ms + segment_duration
 
-        sync_item = {
-            "id": eid,
-            "text": entry.text,
-            "start_ms": entry_start,
-            "end_ms": entry_end,
-            "speaker": entry.speaker,
-            "type": entry.type,
-            "emotion": entry.emotion,
-            "ambient": entry.ambient if entry.ambient else "none",
-        }
+        sync_item["start_ms"] = entry_start
+        sync_item["end_ms"] = entry_end
 
+        # Alignment
         sub_info = subtitles_map.get(eid)
         if sub_info and 'words' in sub_info:
             adjusted_words = []
@@ -82,7 +96,9 @@ def merge_chapter_audio(
             sync_item["words"] = adjusted_words
 
         sync_map.append(sync_item)
-        current_offset_ms = entry_end + gap_ms
+
+        if segment_duration > 0:
+            current_offset_ms = entry_end + gap_ms
 
     if missing_files_count > 0:
         logger.warning(f"Всего пропущено аудиофайлов: {missing_files_count}")

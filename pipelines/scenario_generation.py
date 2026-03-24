@@ -37,7 +37,8 @@ class ScenarioGenerationPipeline:
 
     def _load_libraries(self):
         """
-        Загружает библиотеки эмбиента, SFX и пресеты эмоций из конфигурационных файлов.
+        Загружает библиотеки эмбиента и SFX из конфигурационных файлов.
+        Жёсткие списки эмоций удалены в Архитектуре 2.0 (переход на Instruct).
         """
         logger.info("Загрузка библиотек звукового дизайна...")
 
@@ -55,28 +56,15 @@ class ScenarioGenerationPipeline:
         try:
             if config.SFX_LIBRARY_FILE.exists():
                 self.sfx_library = json.loads(config.SFX_LIBRARY_FILE.read_text("utf-8"))
-                logger.info(f"📚 Загружено SFX сэмплов: {len(self.sfx_library)}")
+                logger.info(f"Загружено SFX сэмплов: {len(self.sfx_library)}")
             else:
                 logger.warning("⚠️ Библиотека SFX не найдена. Генерация SFX будет пропущена.")
         except Exception as e:
             logger.warning(f"Ошибка чтения SFX библиотеки: {e}")
 
-        try:
-            if config.EMOTION_REFERENCE_LIBRARY_FILE.exists():
-                lib_data = json.loads(config.EMOTION_REFERENCE_LIBRARY_FILE.read_text("utf-8"))
-                if isinstance(lib_data, dict):
-                    self.character_emotions = lib_data.get("character_emotions", [])
-                    self.narrator_styles = lib_data.get("narrator_styles", [])
-                else:
-                    self.character_emotions, self.narrator_styles = [], []
-            else:
-                self.character_emotions, self.narrator_styles = [], []
-        except json.JSONDecodeError:
-            self.character_emotions, self.narrator_styles = [], []
-
     def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
-        Запускает полный процесс генерации сценария: текст -> звуки -> эмоции.
+        Запускает полный процесс генерации сценария: текст -> звуки -> эмоции + просодия.
         """
 
         def update_progress(progress: float, stage: str, message: str):
@@ -102,7 +90,8 @@ class ScenarioGenerationPipeline:
                                                            context.load_summary_archive(), update_progress)
                 if not raw_scenario:
                     raise ValueError("Ошибка генерации raw scenario.")
-                context.raw_scenario_cache_file.write_text(raw_scenario.model_dump_json(indent=2), encoding="utf-8")
+
+                context.raw_scenario_cache_file.write_text(raw_scenario.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
 
             scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
@@ -116,8 +105,8 @@ class ScenarioGenerationPipeline:
                 context.ambient_cache_file.write_text(json.dumps(sound_enriched_scenario, indent=2, ensure_ascii=False),
                                                       encoding="utf-8")
 
-            # Эмоциональный слой
-            update_progress(0.75, "Эмоции", "Анализ интонаций и стилей...")
+            # Instruct & tts_text
+            update_progress(0.75, "Эмоции", "Анализ интонаций, пауз и генерация режиссерских инструкций...")
             emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
                                                                    context.load_character_archive(), context.chapter_id)
 
@@ -161,7 +150,6 @@ class ScenarioGenerationPipeline:
     ) -> RawScenario | None:
         """
         Генерирует сценарий, при необходимости разбивая текст на чанки.
-        Размер чанка берется из конфига.
         """
         llm = self.model_manager.get_llm_service('scenario_generator')
 
@@ -171,21 +159,20 @@ class ScenarioGenerationPipeline:
 
         chunk_size = getattr(config, 'SCENARIO_CHUNK_SIZE', 10000)
 
-        logger.info(f"⚙️ Используется размер чанка: {chunk_size} символов")
+        logger.info(f"Используется размер чанка: {chunk_size} символов")
 
         chunks = smart_split_text(full_text, chunk_size=chunk_size, overlap=300)
         total_chunks = len(chunks)
 
         all_entries: List[RawScenarioEntry] = []
 
-        logger.info(f"📖 Текст главы разбит на {total_chunks} частей.")
+        logger.info(f"Текст главы разбит на {total_chunks} частей.")
 
         for i, chunk_text in enumerate(chunks):
             if progress_callback:
                 current_progress = 0.2 + (0.3 * (i / total_chunks))
                 progress_callback(current_progress, "Генерация", f"Обработка части {i + 1} из {total_chunks}...")
 
-            # Формируем промпт для конкретного чанка
             prompt = prompts.format_scenario_generation_prompt(
                 text_chunk=chunk_text,
                 character_archive=archive,
@@ -194,15 +181,13 @@ class ScenarioGenerationPipeline:
                 total_chunks=total_chunks
             )
 
-            # Вызов LLM
             chunk_result = llm.call_for_pydantic(RawScenario, prompt)
 
             if chunk_result and chunk_result.scenario:
-                logger.info(f"✅ Часть {i + 1} готова: получено {len(chunk_result.scenario)} строк.")
+                logger.info(f"Часть {i + 1} готова: получено {len(chunk_result.scenario)} строк.")
                 all_entries.extend(chunk_result.scenario)
             else:
-                logger.error(f"❌ Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
-                # TODO: Здесь можно добавить retry
+                logger.error(f"Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
 
         if not all_entries:
             return None
@@ -251,11 +236,8 @@ class ScenarioGenerationPipeline:
             eid = str(entry['id'])
             if eid in design_map:
                 item = design_map[eid]
-                # Ambient (Stateful)
                 if item.ambient and (item.ambient in valid_amb_ids):
                     current_ambient = item.ambient
-
-                # SFX (Stateless)
                 if item.sfx and (item.sfx in valid_sfx_ids):
                     entry['sfx'] = item.sfx
 
@@ -264,10 +246,7 @@ class ScenarioGenerationPipeline:
         return entries
 
     def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str) -> List[Dict]:
-        """Анализ эмоций."""
-        if not self.character_emotions and not self.narrator_styles:
-            return entries
-
+        """Анализ эмоций и подготовка теневого текста (tts_text) для CosyVoice 3."""
         replicas = [
             {"id": e['id'], "speaker": e['speaker'], "text": e['text']}
             for e in entries if e.get('text') and e.get('speaker')
@@ -281,23 +260,24 @@ class ScenarioGenerationPipeline:
             for char in archive.characters if chapter_id in char.chapter_mentions
         }
 
-        prompt = prompts.format_emotion_analysis_prompt(
-            replicas, char_profiles, self.character_emotions, self.narrator_styles
-        )
+        prompt = prompts.format_emotion_analysis_prompt(replicas, char_profiles)
 
-        emotion_map_data = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(EmotionMap,
-                                                                                                      prompt)
+        emotion_map_data = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(EmotionMap, prompt)
         if not emotion_map_data:
             return entries
 
         entries_by_id = {str(entry['id']): entry for entry in entries}
-        for entry_id_uuid, emotion_tag in emotion_map_data.emotions.items():
+
+        for entry_id_uuid, voice_dir in emotion_map_data.emotions.items():
             entry_id_str = str(entry_id_uuid)
             if entry_id_str in entries_by_id:
-                entries_by_id[entry_id_str]['emotion'] = emotion_tag
+                entries_by_id[entry_id_str]['instruct_prompt'] = voice_dir.instruct
+                entries_by_id[entry_id_str]['tts_text'] = voice_dir.tts_text
 
         for entry in entries:
-            if 'emotion' not in entry:
-                entry['emotion'] = 'neutral'
+            if 'instruct_prompt' not in entry:
+                entry['instruct_prompt'] = 'neutral'
+            if 'tts_text' not in entry:
+                entry['tts_text'] = entry.get('text')
 
         return entries

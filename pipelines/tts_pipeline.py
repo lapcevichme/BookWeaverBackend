@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 class TTSPipeline:
     """
     Основной пайплайн для синтеза речи для всей главы.
-    Адаптирован для работы с CosyVoice (получение WAV-байтов) + поддержка Эмоций.
+    Адаптирован для работы с CosyVoice 3: использует tts_text и instruct_prompt.
     """
 
     def __init__(self, model_manager: ModelManager):
@@ -73,14 +73,21 @@ class TTSPipeline:
             for i, entry in enumerate(scenario.entries):
                 progress = 0.1 + (0.8 * (i / total_entries))
 
+                if entry.type == "image":
+                    logger.debug(f"Пропуск записи {entry.id} (тип image).")
+                    continue
+
+                if not entry.text or not entry.text.strip():
+                    logger.debug(f"Пропуск записи {entry.id} (пустой текст).")
+                    continue
+
                 audio_filename = f"{entry.id}.wav"
                 audio_path = audio_output_dir / audio_filename
 
                 character_name = entry.speaker
                 voice_id = None
 
-                # Определяем голос
-                if character_name == "Рассказчик":
+                if character_name == "Рассказчик" or not character_name:
                     voice_id = manifest.config.default_narrator_voice
                 else:
                     character_uuid = char_name_to_id_map.get(character_name)
@@ -93,15 +100,41 @@ class TTSPipeline:
                     voice_id = manifest.config.default_narrator_voice
 
                 speaker_wav_path = context.get_voice_path(voice_id)
-                if not speaker_wav_path.exists():
-                    logger.error(f"Файл голоса '{voice_id}' не найден: {speaker_wav_path}. Пропуск.")
+                actual_voice_path = None
+
+                if speaker_wav_path.exists():
+                    actual_voice_path = speaker_wav_path
+                else:
+                    voice_dir = speaker_wav_path.parent
+                    if voice_dir.exists() and voice_dir.is_dir():
+                        valid_extensions = ['.mp3', '.wav', '.flac', '.ogg', '.m4a']
+
+                        for ext in valid_extensions:
+                            candidate = voice_dir / f"reference{ext}"
+                            if candidate.exists():
+                                actual_voice_path = candidate
+                                break
+
+                        if not actual_voice_path:
+                            for file in voice_dir.iterdir():
+                                if file.suffix.lower() in valid_extensions:
+                                    actual_voice_path = file
+                                    break
+
+                if not actual_voice_path:
+                    logger.error(
+                        f"Аудиофайл для голоса '{voice_id}' не найден в папке {speaker_wav_path.parent}. Пропуск.")
                     continue
 
-                # Получаем эмоцию из сценария
-                emotion_tag = getattr(entry, 'emotion', None)
+                instruct_prompt = getattr(entry, 'instruct_prompt', 'neutral')
 
-                # Предобработка текста
-                processed_text = text_utils.preprocess_text_for_tts(entry.text, self.pronunciation_dict)
+                tts_text_raw = getattr(entry, 'tts_text', None)
+
+                # Если tts_text пустой или отсутствует (сработала экономия токенов), падаем обратно на чистый text
+                if not tts_text_raw:
+                    tts_text_raw = entry.text
+
+                processed_text = text_utils.preprocess_text_for_tts(tts_text_raw, self.pronunciation_dict)
                 if not processed_text:
                     continue
 
@@ -109,13 +142,12 @@ class TTSPipeline:
                 stage = "Синтез речи"
 
                 if not audio_path.exists():
-                    update_progress(progress, stage,
-                                    f"[{i + 1}/{total_entries}] Синтез: {character_name} ({emotion_tag or 'neutral'})")
+                    update_progress(progress, stage, f"[{i + 1}/{total_entries}] Синтез: {character_name or 'Рассказчик'} ({instruct_prompt})")
 
                     wav_bytes = tts_service.synthesize(
                         text=processed_text,
-                        speaker_wav_path=speaker_wav_path,
-                        emotion=emotion_tag
+                        speaker_wav_path=actual_voice_path,
+                        emotion=instruct_prompt
                     )
 
                     if wav_bytes:
@@ -142,7 +174,7 @@ class TTSPipeline:
                 if audio_duration_ms > 0:
                     stage = "Выравнивание (Whisper)"
 
-                    word_timings = tts_service.generate_word_timings(entry.text, audio_path)
+                    word_timings = tts_service.generate_word_timings(processed_text, audio_path)
 
                     subtitle_entry = self._create_subtitle_entry(
                         audio_filename, entry.text, total_duration_ms, audio_duration_ms, word_timings
@@ -163,7 +195,7 @@ class TTSPipeline:
             raise
 
         if self.model_manager:
-            logger.info("🏁 TTS Pipeline завершен. Освобождаем ресурсы...")
+            logger.info("TTS Pipeline завершен. Освобождаем ресурсы...")
             self.model_manager.unload_service("tts_service")
 
     def _update_manifest_status(self, context: ProjectContext):
