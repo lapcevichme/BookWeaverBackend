@@ -157,6 +157,17 @@ class SoundDesignResult(BaseModel):
     design: List[SoundDesignItem]
 
 
+# --- Emotion & Prosody Models ---
+
+class VoiceDirection(BaseModel):
+    instruct: str = Field(
+        description="Инструкция для диктора (до 5 слов), например: 'тихо, с грустью' или 'нагнетая саспенс'."
+    )
+    tts_text: Optional[str] = Field(
+        default=None,
+        description="ГЕНЕРИРОВАТЬ ТОЛЬКО ЕСЛИ НУЖНЫ ТЕГИ! Если текст произносится без тегов (<|pause|> и тд), ВООБЩЕ НЕ ВЫВОДИ ЭТО ПОЛЕ, чтобы сэкономить токены."
+    )
+
 class EmotionMap(BaseModel):
     """Результат анализа эмоций."""
     emotions: Dict[UUID, str]
@@ -244,31 +255,22 @@ class Character(BaseModel):
     """
     Полная информация о персонаже, собранная со всей книги.
     """
-    id: UUID = Field(default_factory=uuid4, description="Уникальный ID.")
-    name: str = Field(description="Каноническое имя (как персонажа чаще всего называют в диалогах).")
-    entity_type: CharacterType = Field(
-        default=CharacterType.PERSON,
-        description="Тип сущности: person, animal, object."
-    )
-    aliases: List[str] = Field(default_factory=list, description="Список альтернативных имен или титулов.")
-    gender: Optional[str] = Field(None, description="male/female/other")
+    id: UUID = Field(default_factory=uuid4)
+    name: str = Field(...)
+    entity_type: CharacterType = Field(default=CharacterType.PERSON)
+    aliases: List[str] = Field(default_factory=list)
+    gender: Optional[str] = Field(None)
     # TODO Ссылка на другое я - на бущее!
-    related_identity_id: Optional[UUID] = Field(None, description="ID другого персонажа, если это одна личность.")
-    role_tier: str = Field("background", description="protagonist, major, minor, background")
-    spoiler_free_description: str = Field(description="Краткое описание без спойлеров.")
-    description: str = Field(description="Детальное, полное описание персонажа.")
-    # Таймлайны
-    visual_base: Optional[str] = Field(
-        None,
-        description="Базовые визуальные теги на английском (например: '1girl, red hair, green eyes, scar'). Используется как 'чертеж' для сохранения похожести."
-    )
+    related_identity_id: Optional[UUID] = Field(None)
+    role_tier: str = Field("background")
+    spoiler_free_description: str = Field(...)
+    description: str = Field(...)
+    visual_base: Optional[str] = Field(None)
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict)
     visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict)
-    chapter_mentions: Dict[str, str] = Field(default_factory=dict, description="Сводка действий персонажа по главам.")
-
+    chapter_mentions: Dict[str, str] = Field(default_factory=dict)
 
 class CharacterArchive(BaseModel):
-    """Контейнер для хранения полного списка (архива) персонажей."""
     characters: List[Character]
     processed_chapters: List[str] = Field(default_factory=list)
 
