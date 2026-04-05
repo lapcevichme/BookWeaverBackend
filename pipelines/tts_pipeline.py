@@ -123,7 +123,7 @@ class TTSPipeline:
 
                 if not actual_voice_path:
                     logger.error(
-                        f"Аудиофайл для голоса '{voice_id}' не найден в папке {speaker_wav_path.parent}. Пропуск.")
+                        f"❌ Аудиофайл для голоса '{voice_id}' не найден в папке {speaker_wav_path.parent}. Пропуск.")
                     continue
 
                 instruct_prompt = getattr(entry, 'instruct_prompt', 'neutral')
@@ -158,10 +158,10 @@ class TTSPipeline:
                             with sf.SoundFile(str(audio_path)) as f:
                                 audio_duration_ms = int((f.frames / f.samplerate) * 1000)
                         except Exception as e:
-                            logger.error(f"Ошибка чтения метаданных аудио {audio_filename}: {e}")
+                            logger.error(f"❌ Ошибка чтения метаданных аудио {audio_filename}: {e}")
                             audio_duration_ms = 0
                     else:
-                        logger.error(f"Сбой синтеза CosyVoice для реплики {entry.id}")
+                        logger.error(f"❌ Сбой синтеза CosyVoice для реплики {entry.id}")
                         continue
                 else:
                     try:
@@ -189,7 +189,7 @@ class TTSPipeline:
             update_progress(1.0, "Завершено", f"Глава озвучена! Длительность: {total_duration_ms / 1000:.1f} сек.")
 
         except Exception as e:
-            error_msg = f"Критическая ошибка в TTS пайплайне: {e}"
+            error_msg = f"❌ Критическая ошибка в TTS пайплайне: {e}"
             update_progress(1.0, "Ошибка", error_msg)
             logger.error(error_msg, exc_info=True)
             raise
@@ -209,7 +209,7 @@ class TTSPipeline:
                     logger.info(f"Статус главы обновлен: {chapter.id} -> audio_ready")
                     break
         except Exception as e:
-            logger.warning(f"Не удалось обновить статус манифеста: {e}")
+            logger.warning(f"⚠️ Не удалось обновить статус манифеста: {e}")
 
     def _create_subtitle_entry(self, audio_file, text, start_time_ms, duration_ms, word_timings):
         """Формирует запись для JSON-субтитров."""

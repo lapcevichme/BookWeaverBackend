@@ -8,7 +8,6 @@ from utils.setup_logging import setup_logging
 
 logger = logging.getLogger(__name__)
 
-# Расширения, которые мы считаем текстовыми
 TEXT_EXTENSIONS = {'.txt', '.md', '.json', '.csv', '.xml'}
 
 
@@ -57,7 +56,7 @@ class TextCleaner:
                             file_path.write_text(cleaned_content, encoding='utf-8')
                         files_changed += 1
                     else:
-                        # logger.debug(f"[OK] {file_path.name}")
+                        logger.debug(f"[OK] {file_path.name}")
                         pass
 
                 except UnicodeDecodeError:

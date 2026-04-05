@@ -62,23 +62,19 @@ class ComfyService:
         workflow = copy.deepcopy(template)
         mapping = config.COMFY_NODE_MAPPING or {}
 
-        # Позитивный промпт
         pos_id = mapping.get("positive_prompt_node_id")
         if pos_id and pos_id in workflow:
             workflow[pos_id]["inputs"]["text"] = prompt
 
-        # Негативный промпт
         neg_id = mapping.get("negative_prompt_node_id")
         if neg_id and neg_id in workflow:
             workflow[neg_id]["inputs"]["text"] = negative
 
-        # Размеры изображения
         latent_id = mapping.get("empty_latent_node_id")
         if latent_id and latent_id in workflow:
             workflow[latent_id]["inputs"]["width"] = width
             workflow[latent_id]["inputs"]["height"] = height
 
-        # KSampler (Seed)
         ksampler_id = mapping.get("ksampler_node_id")
         if ksampler_id and ksampler_id in workflow:
             inputs = workflow[ksampler_id]["inputs"]

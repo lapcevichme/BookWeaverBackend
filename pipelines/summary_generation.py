@@ -134,10 +134,10 @@ class SummaryGenerationPipeline:
                         summary_archive.save(summary_archive_path)
                         processed_count += 1
                     else:
-                        logger.warning(f"Не удалось сгенерировать пересказ для главы {chapter_id}.")
+                        logger.warning(f"⚠️ Не удалось сгенерировать пересказ для главы {chapter_id}.")
 
                 except Exception as e:
-                    error_msg = f"Ошибка при обработке главы {chapter_id}: {e}"
+                    error_msg = f"❌ Ошибка при обработке главы {chapter_id}: {e}"
                     update_progress(progress, "Ошибка", error_msg)
                     logger.error(error_msg, exc_info=True)
 
@@ -150,7 +150,7 @@ class SummaryGenerationPipeline:
             update_progress(1.0, stage, final_message)
 
         except Exception as e:
-            error_msg = f"Критическая ошибка в пайплайне генерации пересказов: {e}"
+            error_msg = f"❌ Критическая ошибка в пайплайне генерации пересказов: {e}"
             update_progress(1.0, "Ошибка", error_msg)
             logger.error(error_msg, exc_info=True)
             raise

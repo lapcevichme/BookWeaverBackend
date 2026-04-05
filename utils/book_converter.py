@@ -26,7 +26,7 @@ class BookConverter:
         self.project_output_dir = self.context.book_output_dir
 
     def run(self):
-        print(f"🚀 Запуск конвертации: '{self.book_name}'")
+        print(f"Запуск конвертации: '{self.book_name}'")
 
         if self.project_input_dir.exists():
             print(f"⚠️ Удаление старой папки: {self.project_input_dir}")
@@ -57,7 +57,7 @@ class BookConverter:
             print(f"      Метаданные: {meta.get('title')} / {meta.get('author')}")
 
         except Exception as e:
-            print(f"🛑 Ошибка парсинга: {e}")
+            print(f"Ошибка парсинга: {e}")
             return
 
         self._save_chapters(volumes)

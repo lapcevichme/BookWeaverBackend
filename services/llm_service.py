@@ -162,7 +162,7 @@ class LLMService:
             logger.info(
                 f"💰 Cost: ${cost:.5f} (In: {input_tokens}, Out: {output_tokens}) | Total: ${self.total_cost:.4f}")
         else:
-            logger.debug(f"ℹ️ Usage: In: {input_tokens}, Out: {output_tokens} (Price not found for {self.model_name})")
+            logger.debug(f"Usage: In: {input_tokens}, Out: {output_tokens} (Price not found for {self.model_name})")
 
     def call_for_pydantic(self, pydantic_model: Type[PydanticModel], prompt: str) -> Optional[PydanticModel]:
         """Основной метод. Вызывает LLM и пытается распарсить ответ в Pydantic-модель."""
