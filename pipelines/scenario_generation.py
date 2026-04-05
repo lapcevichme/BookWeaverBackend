@@ -60,7 +60,7 @@ class ScenarioGenerationPipeline:
             else:
                 logger.warning("⚠️ Библиотека SFX не найдена. Генерация SFX будет пропущена.")
         except Exception as e:
-            logger.warning(f"Ошибка чтения SFX библиотеки: {e}")
+            logger.warning(f"⚠️ Ошибка чтения SFX библиотеки: {e}")
 
     def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
@@ -120,7 +120,7 @@ class ScenarioGenerationPipeline:
 
         except Exception as e:
             update_progress(1.0, "Ошибка", str(e))
-            logger.error(f"Error: {e}", exc_info=True)
+            logger.error(f"❌ Error: {e}", exc_info=True)
             raise e
 
     def _update_manifest_status(self, context: ProjectContext):
@@ -187,7 +187,7 @@ class ScenarioGenerationPipeline:
                 logger.info(f"Часть {i + 1} готова: получено {len(chunk_result.scenario)} строк.")
                 all_entries.extend(chunk_result.scenario)
             else:
-                logger.error(f"Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
+                logger.error(f"❌ Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
 
         if not all_entries:
             return None

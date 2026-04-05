@@ -52,7 +52,7 @@ class TTSService(BaseTorchService):
         Принудительно выгружает Whisper из VRAM.
         """
         if self._whisper_model is not None:
-            logger.info("🔻 VRAM: Выгрузка модели Whisper...")
+            logger.info("VRAM: Выгрузка модели Whisper...")
             del self._whisper_model
             self._whisper_model = None
             self._is_loaded = False
@@ -67,13 +67,12 @@ class TTSService(BaseTorchService):
         if path_str in self._reference_transcription_cache:
             return self._reference_transcription_cache[path_str]
 
-        # logger.info(f"🎙️ Транскрипция референса: {speaker_wav_path.name}")
         model = self.whisper_model
         if not model:
             return " "
 
         try:
-            # logger.debug(f"Transcribing ref: {speaker_wav_path.name}")
+            logger.info(f"Транскрипция референса: {speaker_wav_path.name}")
             result = model.transcribe(path_str)
             text = result.text.strip()
             self._reference_transcription_cache[path_str] = text

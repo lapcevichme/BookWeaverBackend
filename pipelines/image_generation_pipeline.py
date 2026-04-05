@@ -101,9 +101,9 @@ class ImageGenerationPipeline:
                                 archive.save(context.get_character_archive_path())
                             break
                 else:
-                    logger.warning(f"Не удалось получить результат для {char_name}")
+                    logger.warning(f"⚠️ Не удалось получить результат для {char_name}")
 
             except Exception as e:
-                logger.error(f"Ошибка при обработке {char_name}: {e}")
+                logger.error(f"❌ Ошибка при обработке {char_name}: {e}")
 
         update_progress(1.0, "Завершено", f"Сгенерировано изображений: {generated_count} из {total_tasks}")

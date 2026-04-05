@@ -80,13 +80,13 @@ class ModelManager:
             service = self._services[service_key]
 
             if hasattr(service, 'unload'):
-                logger.info(f"♻️ ORCHESTRATOR: Выгрузка сервиса '{service_key}' для освобождения VRAM...")
+                logger.info(f"ORCHESTRATOR: Выгрузка сервиса '{service_key}' для освобождения VRAM...")
                 service.unload()
 
             pass
 
     def unload_all_gpu_models(self):
         """Полная очистка GPU перед запуском очень тяжелых задач (например, FLUX)."""
-        logger.info("🚨 ORCHESTRATOR: Emergency VRAM cleanup requested.")
+        logger.info("ORCHESTRATOR: Emergency VRAM cleanup requested.")
         if 'tts_service' in self._services:
             self.unload_service('tts_service')

@@ -66,7 +66,7 @@ class CharacterAnalysisPipeline:
                     continue
 
                 if self._is_chapter_processed(master_archive, chapter_id):
-                    logger.info(f"⏭️ Глава {chapter_id} пропущена (уже обработана ранее).")
+                    logger.info(f"Глава {chapter_id} пропущена (уже обработана ранее).")
                     continue
 
                 if not chapter_text.strip():
@@ -85,7 +85,7 @@ class CharacterAnalysisPipeline:
                 recon_result = self._perform_recon(master_archive, chapter_text, chapter_summary_text)
 
                 if not recon_result or (not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
-                    logger.info(f"🔍 В главе {chapter_id} персонажи не обнаружены.")
+                    logger.info(f"В главе {chapter_id} персонажи не обнаружены.")
                     self._mark_chapter_processed(master_archive, chapter_id)
                     master_archive.save(context.get_character_archive_path())
                     continue
@@ -169,12 +169,12 @@ class CharacterAnalysisPipeline:
 
         for patch in patch_list.patches:
             if patch.entity_type == CharacterType.OBJECT:
-                logger.info(f"🗑️ ИГНОРИРУЕМ ОБЪЕКТ: {patch.name}")
+                logger.info(f"ИГНОРИРУЕМ ОБЪЕКТ: {patch.name}")
                 continue
 
             if not patch.name or self._is_role_name(patch.name) and patch.id is None:
                 # Если LLM пытается создать нового персонажа с именем "Солдат 1", лучше это проигнорировать, если массовка нужна - раскомментить
-                logger.info(f"🗑️ ИГНОРИРУЕМ МАССОВКУ/РОЛЬ: {patch.name}")
+                logger.info(f"ИГНОРИРУЕМ МАССОВКУ/РОЛЬ: {patch.name}")
                 continue
 
             if patch.id and patch.id in char_map:
@@ -182,9 +182,9 @@ class CharacterAnalysisPipeline:
 
                 if patch.name and patch.name != char.name:
                     if self._is_dangerous_rename(char.name, patch.name):
-                        logger.warning(f"🛡️ ЗАБЛОКИРОВАНО ПЕРЕИМЕНОВАНИЕ (Downgrade): {char.name} -> {patch.name}")
+                        logger.warning(f"ЗАБЛОКИРОВАНО ПЕРЕИМЕНОВАНИЕ (Downgrade): {char.name} -> {patch.name}")
                     else:
-                        logger.info(f"♻️ ПЕРЕИМЕНОВАНИЕ УТВЕРЖДЕНО: {char.name} -> {patch.name}")
+                        logger.info(f"ПЕРЕИМЕНОВАНИЕ УТВЕРЖДЕНО: {char.name} -> {patch.name}")
                         if char.name not in char.aliases and not self._is_role_name(char.name):
                             char.aliases.append(char.name)
                         char.name = patch.name

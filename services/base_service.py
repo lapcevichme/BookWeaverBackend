@@ -10,7 +10,7 @@ class BaseTorchService(ABC):
     """
     Базовый класс для сервисов, использующих PyTorch.
     Реализует логику определения устройства, ленивой инициализации
-    и УПРАВЛЕНИЯ ПАМЯТЬЮ (VRAM Cleaning).
+    и управление памятью (VRAM Cleaning).
     """
 
     def __init__(self):
@@ -29,10 +29,10 @@ class BaseTorchService(ABC):
                 import torch
                 if torch.cuda.is_available():
                     self._device = "cuda"
-                    # logger.info("BaseTorchService: Обнаружена CUDA. Используем GPU.")
+                    logger.info("BaseTorchService: Обнаружена CUDA. Используем GPU.")
                 else:
                     self._device = "cpu"
-                    # logger.info("BaseTorchService: CUDA не найдена. Используем CPU.")
+                    logger.info("BaseTorchService: CUDA не найдена. Используем CPU.")
             except ImportError:
                 logger.warning("BaseTorchService: PyTorch не найден. Устанавливаем device='cpu'.")
                 self._device = "cpu"
@@ -57,6 +57,6 @@ class BaseTorchService(ABC):
                 gc.collect()
                 torch.cuda.empty_cache()
                 torch.cuda.ipc_collect()
-                logger.info("🧹 VRAM: Кэш CUDA очищен (Garbage Collection + Empty Cache).")
+                logger.info("VRAM: Кэш CUDA очищен (Garbage Collection + Empty Cache).")
             except Exception as e:
                 logger.error(f"Ошибка при очистке VRAM: {e}")

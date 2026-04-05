@@ -4,10 +4,8 @@ import sys
 import argparse
 from importlib.metadata import version, PackageNotFoundError
 
-# Force include these libraries
 ALWAYS_INCLUDE = set()
 
-# Mapping: import name -> pip package name
 PACKAGE_MAPPING = {
     "dotenv": "python-dotenv",
     "google.generativeai": "google-generativeai",
@@ -25,14 +23,12 @@ PACKAGE_MAPPING = {
     "stable_whisper": "stable-ts",
 }
 
-# Dirs to ignore
 IGNORE_DIRS = {
     'venv', '.venv', 'env', '.env', '.git', '__pycache__',
     '.idea', '.vscode', 'node_modules', 'build', 'dist',
     'site-packages', 'migrations', 'tests'
 }
 
-# Whitelist folders/files to scan
 DEFAULT_WHITELIST = [
     "api", "core", "pipelines", "services", "utils", "tools",
     "cli.py", "main.py", "config.py"
@@ -91,7 +87,6 @@ def get_imports_from_file(filepath):
 
 def get_project_root():
     current_dir = os.path.dirname(os.path.abspath(__file__))
-    # If script is in a 'tools' subdir, go up one level
     if os.path.basename(current_dir) == 'tools':
         return os.path.dirname(current_dir)
     return current_dir
@@ -155,7 +150,6 @@ def main():
     raw_imports = scan_project(root_dir, DEFAULT_WHITELIST)
     final_requirements = set()
 
-    # Always include
     for req in ALWAYS_INCLUDE:
         final_requirements.add(req)
 
@@ -165,7 +159,6 @@ def main():
             continue
         if is_stdlib(module):
             continue
-        # Skip capitalized modules unless they are in mapping (aggressive heuristic)
         if module[0].isupper() and module not in PACKAGE_MAPPING:
             continue
 
@@ -190,10 +183,8 @@ def main():
 
     out_path = os.path.join(root_dir, args.output)
     with open(out_path, "w", encoding="utf-8") as f:
-        # Add index-url for CPU torch by default if torch is present
         if any('torch' in req for req in requirements_lines):
-            # You can uncomment this if you want it auto-added
-            # f.write("--index-url https://download.pytorch.org/whl/cpu\n\n")
+            f.write("--index-url https://download.pytorch.org/whl/cpu\n\n")
             pass
 
         for line in sorted(requirements_lines):
