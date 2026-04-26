@@ -25,7 +25,8 @@ RANOBELIB_USER_TOKEN=твой_bearer
 ELEVENLABS_API_KEY=твой_api_key
 ```
 
-> **Важно**: Токен Ranobelib можно достать из большинства запросов с их сайта. Посмотреть код страницы -> Network ->
+> [!TIP]
+> Токен Ranobelib можно достать из большинства запросов с их сайта. Посмотреть код страницы -> Network ->
 > Перезагрузить станицу. Ориентируйтесь на xhr запросы -> Тык -> Снизу Request Headers где будет Bearer (очень длинная
 > строка)
 ---
@@ -47,6 +48,10 @@ python ranobelib_loader.py https://ranobelib.me/ru/book/12345--title
 ```
 
 **Результат:** Папка в `input/` с файлами `chapter_X.txt` и `metadata.json`.
+
+> [!IMPORTANT]
+> Не очень стабильный инструмент. RanobeLib любят поменять адрес для картинок или пути в API. Также они нередко банят
+> VPN (или наоборот не пускают без него).
 
 ---
 
@@ -105,5 +110,5 @@ python voice_picker.py
 python dependencies.py
 
 # Собрать и зафиксировать текущие версии (рекомендуется)
-python dependencies.py --freeze```
+python dependencies.py --freeze
 ```
