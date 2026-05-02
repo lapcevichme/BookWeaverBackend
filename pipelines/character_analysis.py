@@ -91,7 +91,7 @@ class CharacterAnalysisPipeline:
                     continue
 
                 relevant_chars = self._filter_archive_by_ids(master_archive, recon_result.mentioned_existing_character_ids)
-                relevant_characters_json = json.dumps([char.model_dump(mode='json', include={'id', 'name', 'aliases', 'role_tier', 'visual_base'}) for char in relevant_chars], ensure_ascii=False)
+                relevant_characters_json = json.dumps([char.model_dump(mode='json', include={'id', 'name', 'aliases', 'role_tier', 'visual_base', 'voice_base'}) for char in relevant_chars], ensure_ascii=False)
 
                 update_progress(progress, stage, f"Глава {i + 1}/{total_chapters}: Глубокий анализ...")
                 patch_list = self._perform_operation(
@@ -200,9 +200,16 @@ class CharacterAnalysisPipeline:
                     if char.name in char.aliases:
                         char.aliases.remove(char.name)
 
+                if patch.visual_base and patch.visual_base != char.visual_base:
+                    char.visual_base = patch.visual_base
+                
+                if patch.voice_base and patch.voice_base != char.voice_base:
+                    char.voice_base = patch.voice_base
+
                 update_data = patch.model_dump(exclude_unset=True, exclude={
                     'id', 'name', 'aliases', 'chapter_mentions',
-                    'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning', 'entity_type'
+                    'timeline_voice_update', 'timeline_visual_update', 'role_tier', 'naming_reasoning', 'entity_type',
+                    'visual_base', 'voice_base'
                 })
 
                 if update_data:
@@ -234,7 +241,8 @@ class CharacterAnalysisPipeline:
                     role_tier=patch.role_tier or "minor",
                     chapter_mentions={chapter_id: patch.current_chapter_action} if patch.current_chapter_action else {},
                     gender=patch.gender,
-                    visual_base=patch.visual_base or ""
+                    visual_base=patch.visual_base or "",
+                    voice_base=patch.voice_base or ""
                 )
 
                 if patch.timeline_voice_update:
