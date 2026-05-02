@@ -92,6 +92,10 @@ class CharacterPatch(BaseModel):
         None,
         description="Базовые визуальные теги на английском (например: '1girl, red hair, green eyes, scar'). Используется как 'чертеж' для сохранения похожести."
     )
+    voice_base: Optional[str] = Field(
+        None,
+        description="Базовые теги голоса на английском (например: 'young male, calm, deep'). Используется для инициализации новых персонажей."
+    )
 
     current_chapter_action: Optional[str] = Field(
         None,
@@ -266,6 +270,7 @@ class Character(BaseModel):
     spoiler_free_description: str = Field(...)
     description: str = Field(...)
     visual_base: Optional[str] = Field(None)
+    voice_base: str = Field(default="")
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict)
     visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict)
     chapter_mentions: Dict[str, str] = Field(default_factory=dict)
