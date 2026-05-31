@@ -20,12 +20,13 @@ RAW_TEXT_DIR = INPUT_DIR / "raw_text"
 
 # Logging
 LOGS_DIR = BASE_DIR / "logs"
-LOG_FILE_NAME = "bookweaver.log"
-LOG_FILE_PATH = LOGS_DIR / LOG_FILE_NAME
+LOG_APP_FILE = LOGS_DIR / "app.log"
+LOG_DEBUG_FILE = LOGS_DIR / "debug.log"
 
 # Assets
 ASSETS_DIR = BASE_DIR / "assets"
 AMBIENT_DIR = ASSETS_DIR / "ambient"
+SFX_DIR = ASSETS_DIR / "sfx"
 PRONUNCIATION_DICT_FILE = ASSETS_DIR / "pronunciation_dictionary.json"
 AMBIENT_LIBRARY_FILE = ASSETS_DIR / "ambient_library.json"
 EMOTION_REFERENCE_LIBRARY_FILE = ASSETS_DIR / "emotion_reference_library.json"

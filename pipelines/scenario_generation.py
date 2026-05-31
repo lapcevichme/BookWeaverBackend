@@ -19,6 +19,7 @@ from core.data_models import (
 from core.project_context import ProjectContext
 from pipelines import prompts
 from services.model_manager import ModelManager
+from utils.metrics import metrics_collector
 from utils.prompt_utils import generate_human_schema
 from utils.text_utils import smart_split_text
 
@@ -76,6 +77,7 @@ class ScenarioGenerationPipeline:
 
         try:
             context.ensure_dirs()
+            metrics_collector.start_chapter(context.chapter_id)
 
             # Текстовый слой сценария
             if context.raw_scenario_cache_file.exists():
@@ -116,6 +118,7 @@ class ScenarioGenerationPipeline:
             final_scenario.save(context.scenario_file)
 
             self._update_manifest_status(context)
+            metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
             update_progress(1.0, "Завершено", "Готово!")
 
         except Exception as e:
@@ -181,7 +184,7 @@ class ScenarioGenerationPipeline:
                 total_chunks=total_chunks
             )
 
-            chunk_result = llm.call_for_pydantic(RawScenario, prompt)
+            chunk_result = llm.call_for_pydantic(RawScenario, prompt, prompt_type="scenario_generation")
 
             if chunk_result and chunk_result.scenario:
                 logger.info(f"Часть {i + 1} готова: получено {len(chunk_result.scenario)} строк.")
@@ -222,7 +225,7 @@ class ScenarioGenerationPipeline:
             schema_description=schema_desc
         )
 
-        result = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(SoundDesignResult, prompt)
+        result = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(SoundDesignResult, prompt, prompt_type="sound_design")
         if not result:
             return entries
 
@@ -262,7 +265,7 @@ class ScenarioGenerationPipeline:
 
         prompt = prompts.format_emotion_analysis_prompt(replicas, char_profiles)
 
-        emotion_map_data = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(EmotionMap, prompt)
+        emotion_map_data = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(EmotionMap, prompt, prompt_type="emotion_analysis")
         if not emotion_map_data:
             return entries
 

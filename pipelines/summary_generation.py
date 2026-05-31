@@ -6,10 +6,12 @@ import logging
 from typing import Optional, Callable
 from pydantic import BaseModel
 
+import config
 from core.project_context import ProjectContext
 from core.data_models import ChapterSummary, RawChapterSummary, VolumeSummary
 from pipelines import prompts
 from services.model_manager import ModelManager
+from utils.metrics import metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,7 @@ class SummaryGenerationPipeline:
                     class RawVolSum(BaseModel):
                         summary: str
 
-                    res = llm_service.call_for_pydantic(RawVolSum, vol_prompt)
+                    res = llm_service.call_for_pydantic(RawVolSum, vol_prompt, prompt_type="volume_summary")
                     if res:
                         summary_archive.volume_summaries[vol_str] = VolumeSummary(
                             volume_num=vol_num,
@@ -91,6 +93,8 @@ class SummaryGenerationPipeline:
             for i, (vol_num, chap_num) in enumerate(ordered_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
                 chapter_id = f"vol_{vol_num}_chap_{chap_num}"
+                
+                metrics_collector.start_chapter(chapter_id)
 
                 if chapter_id in summary_archive.summaries:
                     continue
@@ -122,7 +126,7 @@ class SummaryGenerationPipeline:
                         prev_volume_summary=prev_volume_summary_text
                     )
 
-                    raw_summary_result = llm_service.call_for_pydantic(RawChapterSummary, prompt)
+                    raw_summary_result = llm_service.call_for_pydantic(RawChapterSummary, prompt, prompt_type="chapter_summary")
 
                     if raw_summary_result:
                         final_summary = ChapterSummary(
@@ -133,6 +137,7 @@ class SummaryGenerationPipeline:
                         summary_archive.summaries[chapter_id] = final_summary
                         summary_archive.save(summary_archive_path)
                         processed_count += 1
+                        metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
                     else:
                         logger.warning(f"⚠️ Не удалось сгенерировать пересказ для главы {chapter_id}.")
 
