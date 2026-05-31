@@ -1,39 +1,63 @@
 import logging
 import sys
-from logging.handlers import RotatingFileHandler
+from logging.handlers import TimedRotatingFileHandler
 import config
 
-# FIXME: Когда переполняется файл логов, название идет формата "*.log.{num}"
 def setup_logging():
     """
-    Настраивает систему логирования для всего приложения.
+    Настраивает систему логирования:
+    - stdout: INFO+ (кратко)
+    - app.log: INFO+ (основные события, ротация по дням)
+    - debug.log: DEBUG+ (всё подряд, ротация по дням)
     """
     config.LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
-    logger = logging.getLogger()
-    logger.setLevel(logging.DEBUG)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
 
-    log_format = "%(asctime)s - %(levelname)s - %(name)s - %(message)s"
-    formatter = logging.Formatter(log_format)
+    if root_logger.hasHandlers():
+        root_logger.handlers.clear()
+
+    file_format = "%(asctime)s - %(levelname)-8s - %(name)s - %(message)s"
+    console_format = "%(asctime)s - %(levelname)s - %(message)s"
+
+    file_formatter = logging.Formatter(file_format)
+    console_formatter = logging.Formatter(console_format, datefmt="%H:%M:%S")
 
     stdout_handler = logging.StreamHandler(sys.stdout)
-    stdout_handler.setFormatter(formatter)
+    stdout_handler.setLevel(logging.INFO)
+    stdout_handler.setFormatter(console_formatter)
+    root_logger.addHandler(stdout_handler)
 
-    file_handler = RotatingFileHandler(
-        config.LOG_FILE_PATH,
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
+    app_file_handler = TimedRotatingFileHandler(
+        config.LOG_APP_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=30,
         encoding='utf-8'
     )
-    file_handler.setFormatter(formatter)
+    app_file_handler.setLevel(logging.INFO)
+    app_file_handler.setFormatter(file_formatter)
+    app_file_handler.suffix = "%Y-%m-%d"
+    root_logger.addHandler(app_file_handler)
 
-    if logger.hasHandlers():
-        logger.handlers.clear()
+    debug_file_handler = TimedRotatingFileHandler(
+        config.LOG_DEBUG_FILE,
+        when="midnight",
+        interval=1,
+        backupCount=7,
+        encoding='utf-8'
+    )
+    debug_file_handler.setLevel(logging.DEBUG)
+    debug_file_handler.setFormatter(file_formatter)
+    debug_file_handler.suffix = "%Y-%m-%d"
+    root_logger.addHandler(debug_file_handler)
 
-    logger.addHandler(stdout_handler)
-    logger.addHandler(file_handler)
-
+    logging.getLogger("openai").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("PIL").setLevel(logging.WARNING)
+    logging.getLogger("comfy_service").setLevel(logging.INFO)
 
-    logging.info(f"Система логирования настроена. Лог: {config.LOG_FILE_PATH}")
+    logging.info(f"Логирование настроено: APP={config.LOG_APP_FILE}, DEBUG={config.LOG_DEBUG_FILE}")

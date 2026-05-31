@@ -6,10 +6,12 @@ import logging
 from typing import List, Optional, Callable
 from uuid import UUID
 
+import config
 from core.project_context import ProjectContext
 from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList, CharacterType
 from services.model_manager import ModelManager
 from pipelines import prompts
+from utils.metrics import metrics_collector
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,8 @@ class CharacterAnalysisPipeline:
                 progress = 0.1 + (i / total_chapters) * 0.9
                 chapter_ctx = ProjectContext(book_name, vol_num, chap_num)
                 chapter_id = chapter_ctx.chapter_id
+                
+                metrics_collector.start_chapter(chapter_id)
 
                 try:
                     chapter_text = chapter_ctx.get_chapter_text()
@@ -107,14 +111,13 @@ class CharacterAnalysisPipeline:
 
                 self._mark_chapter_processed(master_archive, chapter_id)
                 master_archive.save(context.get_character_archive_path())
+                metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")
 
         except Exception as e:
             logger.error(f"❌ Ошибка пайплайна: {e}", exc_info=True)
             raise
-
-    # --- ВАЛИДАТОРЫ ---
 
     def _is_role_name(self, name: str) -> bool:
         """Проверяет, содержит ли имя слово из черного списка ролей."""
@@ -152,14 +155,12 @@ class CharacterAnalysisPipeline:
         known_chars_json = json.dumps(known_chars_for_recon, ensure_ascii=False) if known_chars_for_recon else "[]"
 
         prompt = prompts.format_character_recon_prompt(chapter_text, known_chars_json, chapter_summary)
-        return fast_llm.call_for_pydantic(CharacterReconResult, prompt)
+        return fast_llm.call_for_pydantic(CharacterReconResult, prompt, prompt_type="character_recon")
 
     def _perform_operation(self, relevant_chars_json: str, new_names: List[str], text: str, vol: int, chap: int) -> Optional[CharacterPatchList]:
         powerful_llm = self.model_manager.get_llm_service('scenario_generator')
         prompt = prompts.format_character_patch_prompt(relevant_chars_json, new_names, text, vol, chap)
-        return powerful_llm.call_for_pydantic(CharacterPatchList, prompt)
-
-    # --- ЛОГИКА ПРИМЕНЕНИЯ ПАТЧЕЙ ---
+        return powerful_llm.call_for_pydantic(CharacterPatchList, prompt, prompt_type="character_patch")
 
     def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int, chap: int, chapter_text: str) -> CharacterArchive:
         """Применяет патчи с проверкой на коллизии имен и фильтрацией мусора."""
@@ -173,8 +174,8 @@ class CharacterAnalysisPipeline:
                 continue
 
             if not patch.name or self._is_role_name(patch.name) and patch.id is None:
-                # Если LLM пытается создать нового персонажа с именем "Солдат 1", лучше это проигнорировать, если массовка нужна - раскомментить
                 logger.info(f"ИГНОРИРУЕМ МАССОВКУ/РОЛЬ: {patch.name}")
+                metrics_collector.increment("role_blacklist_triggers")
                 continue
 
             if patch.id and patch.id in char_map:
@@ -185,6 +186,8 @@ class CharacterAnalysisPipeline:
                         logger.warning(f"ЗАБЛОКИРОВАНО ПЕРЕИМЕНОВАНИЕ (Downgrade): {char.name} -> {patch.name}")
                     else:
                         logger.info(f"ПЕРЕИМЕНОВАНИЕ УТВЕРЖДЕНО: {char.name} -> {patch.name}")
+                        if patch.name in char.aliases:
+                            metrics_collector.increment("name_collisions")
                         if char.name not in char.aliases and not self._is_role_name(char.name):
                             char.aliases.append(char.name)
                         char.name = patch.name
@@ -256,7 +259,6 @@ class CharacterAnalysisPipeline:
         archive.characters = list(char_map.values())
         return archive
 
-    # --- УТИЛИТЫ СОСТОЯНИЯ ---
 
     def _is_chapter_processed(self, archive: CharacterArchive, chapter_id: str) -> bool:
         """
