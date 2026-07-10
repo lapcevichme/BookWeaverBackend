@@ -4,44 +4,89 @@
 """
 from __future__ import annotations
 from pathlib import Path
-from typing import Tuple, List
+from typing import Tuple, List, Optional
+from sqlmodel import Session, select
 import config
-from core.data_models import Scenario, CharacterArchive, ChapterSummaryArchive, BookManifest
+from core.database import engine
+from core.data_models import Scenario, CharacterArchive, ChapterSummaryArchive, BookManifest, Book, Chapter, Character, ScenarioEntry, ChapterSummary
 from utils import file_utils
 
 
 class ProjectContext:
-    def __init__(self, book_name: str, volume_num: int | None = None, chapter_num: int | None = None):
+    def __init__(self, book_name: str, volume_num: int | None = None, chapter_num: int | None = None, session: Optional[Session] = None):
         self.book_name = book_name
         self.volume_num = volume_num
         self.chapter_num = chapter_num
+        self.session = session # Новое: сессия БД
 
         # --- Базовые пути ---
         self.book_dir = config.INPUT_DIR / config.BOOKS_DIR_NAME / self.book_name
         self.book_output_dir = config.OUTPUT_DIR / self.book_name
 
-        # --- Пути к файлам-архивам уровня книги ---
+        # --- Пути к файлам-архивам (Legacy) ---
         self.character_archive_file = self.book_output_dir / "character_archive.json"
         self.summary_archive_file = self.book_output_dir / "chapter_summaries.json"
         self.manifest_file = self.book_output_dir / "manifest.json"
         self.cover_file = self.book_output_dir / "cover.jpg"
         self.images_dir = self.book_output_dir / "images"
 
-        # --- Пути уровня главы (определяются, только если переданы номера) ---
+        # --- Идентификаторы для БД ---
+        self.book_id = self.book_name
         if volume_num is not None and chapter_num is not None:
             self.chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
             self.chapter_output_dir = self.book_output_dir / self.chapter_id
+            
+            # Файлы
             md_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.md"
             txt_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.txt"
             self.chapter_file = md_path if md_path.exists() else txt_path
+            
             self.scenario_file = self.chapter_output_dir / "scenario.json"
             self.subtitles_file = self.chapter_output_dir / "subtitles.json"
             self.chapter_audio_dir = self.chapter_output_dir / "audio"
 
-            self.raw_scenario_cache_file = self.chapter_output_dir / "cache_raw_scenario.json"
-            self.ambient_cache_file = self.chapter_output_dir / "cache_ambient.json"
-            # TODO: и это кэшировать
-            # self.emotion_cache_file = self.chapter_output_dir / "cache_emotion.json"
+    def get_session(self) -> Session:
+        """Возвращает текущую сессию или создает новую."""
+        if self.session:
+            return self.session
+        return Session(engine)
+
+    def load_book(self) -> Book | None:
+        """Загружает книгу из БД."""
+        with self.get_session() as session:
+            return session.get(Book, self.book_id)
+
+    def load_chapter(self) -> Chapter | None:
+        """Загружает главу из БД."""
+        if not hasattr(self, 'chapter_id'): return None
+        with self.get_session() as session:
+            return session.get(Chapter, self.chapter_id)
+
+    def load_scenario_entries(self) -> List[ScenarioEntry]:
+        """Загружает все записи сценария для главы из БД."""
+        if not hasattr(self, 'chapter_id'): return []
+        with self.get_session() as session:
+            statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == self.chapter_id).order_by(ScenarioEntry.order_index)
+            return session.exec(statement).all()
+
+    # --- Legacy Loaders (Wrapper around DB or Files) ---
+
+    def load_manifest(self) -> BookManifest:
+        """Загружает манифест (пока через JSON для совместимости)."""
+        return BookManifest.load(self.manifest_file)
+
+    def load_character_archive(self) -> CharacterArchive:
+        """Загружает архив персонажей (пока через JSON для совместимости)."""
+        return CharacterArchive.load(self.character_archive_file)
+
+    def load_scenario(self) -> Scenario | None:
+        """Загружает сценарий (пока через JSON для совместимости)."""
+        if not hasattr(self, 'scenario_file'):
+            return None
+        try:
+            return Scenario.load(self.scenario_file)
+        except FileNotFoundError:
+            return None
 
     def check_chapter_status(self) -> dict:
         """
