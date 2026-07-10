@@ -1,15 +1,16 @@
 """
 Центральный модуль, определяющий все основные структуры данных проекта.
+Поддерживает SQLModel для БД и сохраняет метаданные для генерации промптов.
 """
-from __future__ import annotations
 import json
 from pathlib import Path
-from typing import List, Optional, Dict, Literal
+from typing import List, Optional, Dict, Literal, Any
 from uuid import UUID, uuid4
 from enum import Enum
 
-from pydantic import BaseModel, Field, ValidationError, model_validator
-
+from pydantic import model_validator, ValidationError
+from sqlmodel import SQLModel, Field, Relationship, Column, JSON
+from sqlalchemy import Text
 
 # --- Enums ---
 
@@ -19,10 +20,9 @@ class CharacterType(str, Enum):
     OBJECT = "object"
     UNKNOWN = "unknown"
 
+# --- Timeline Models (Stored as JSON in DB) ---
 
-# --- Timeline Models ---
-
-class CharacterVoiceState(BaseModel):
+class CharacterVoiceState(SQLModel):
     """
     Состояние голоса персонажа в конкретный момент времени (Keyframe).
     """
@@ -33,8 +33,7 @@ class CharacterVoiceState(BaseModel):
                                        description="Теги для поиска голоса (на английском), например: 'young male, raspy'.")
     assigned_voice_id: Optional[str] = Field(None, description="ID голоса в ElevenLabs (заполняется скриптом, не LLM).")
 
-
-class CharacterVisualState(BaseModel):
+class CharacterVisualState(SQLModel):
     """
     Состояние внешности персонажа в конкретный момент времени (Keyframe).
     """
@@ -42,10 +41,99 @@ class CharacterVisualState(BaseModel):
     image_prompt: Optional[str] = Field(None, description="Готовый промпт для генерации (на английском, для SD).")
     reference_image_path: Optional[str] = Field(None, description="Путь к сгенерированному референсу.")
 
+# --- Database Tables ---
 
-# --- Analysis & Patching Models ---
+class Book(SQLModel, table=True):
+    """Основная таблица книги/проекта."""
+    id: str = Field(primary_key=True, description="Например: geroi-nashego-vremeni")
+    title: str = Field(index=True)
+    author: Optional[str] = None
+    description: Optional[str] = None
+    status: str = Field(default="ongoing")
+    cover_image_path: Optional[str] = None
+    tags: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    config: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    
+    # Relationships
+    chapters: List["Chapter"] = Relationship(back_populates="book")
+    characters: List["Character"] = Relationship(back_populates="book")
 
-class CharacterReconResult(BaseModel):
+class Chapter(SQLModel, table=True):
+    """Таблица глав книги."""
+    id: str = Field(primary_key=True, description="Canonical ID: vol_X_chap_Y")
+    book_id: str = Field(foreign_key="book.id", index=True)
+    
+    volume_num: int = Field(default=1)
+    chapter_num: int
+    title: Optional[str] = None
+    status: str = Field(default="draft") # draft, scenario_ready, audio_ready
+    order_index: int = Field(default=0)
+    raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    
+    # Relationships
+    book: Book = Relationship(back_populates="chapters")
+    summary: Optional["ChapterSummary"] = Relationship(back_populates="chapter")
+    entries: List["ScenarioEntry"] = Relationship(back_populates="chapter")
+
+class ChapterSummary(SQLModel, table=True):
+    """Сводка/саммари главы."""
+    chapter_id: str = Field(foreign_key="chapter.id", primary_key=True)
+    teaser: str = Field(..., description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
+    synopsis: str = Field(sa_column=Column(Text), description="Детальный (100-150 слов) конспект для внутреннего использования. СОДЕРЖИТ спойлеры.")
+    
+    # Relationships
+    chapter: Chapter = Relationship(back_populates="summary")
+
+class Character(SQLModel, table=True):
+    """
+    Полная информация о персонаже, собранная со всей книги.
+    """
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    book_id: str = Field(foreign_key="book.id", index=True)
+    name: str = Field(..., index=True)
+    entity_type: CharacterType = Field(default=CharacterType.PERSON)
+    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    gender: Optional[str] = Field(None)
+    related_identity_id: Optional[UUID] = Field(None)
+    role_tier: str = Field(default="background")
+    spoiler_free_description: str = Field(..., sa_column=Column(Text))
+    description: str = Field(..., sa_column=Column(Text))
+    visual_base: Optional[str] = Field(None)
+    voice_base: str = Field(default="")
+    
+    # Timelines stored as JSON
+    voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(JSON))
+    visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict, sa_column=Column(JSON))
+    chapter_mentions: Dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    
+    # Relationships
+    book: Book = Relationship(back_populates="characters")
+    scenario_entries: List["ScenarioEntry"] = Relationship(back_populates="speaker")
+
+class ScenarioEntry(SQLModel, table=True):
+    """Представляет одну запись (строку) в финальном сценарии."""
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    chapter_id: str = Field(foreign_key="chapter.id", index=True)
+    speaker_id: Optional[UUID] = Field(default=None, foreign_key="character.id")
+    
+    type: str = Field(..., description="dialogue, narration, thought, image")
+    text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    tts_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    speaker_name: Optional[str] = None # Имя говорящего (из LLM)
+    instruct_prompt: str = Field(default="neutral")
+    ambient: str = Field(default="none")
+    sfx: Optional[str] = None
+    audio_file: Optional[str] = None
+    src: Optional[str] = None
+    order_index: int = Field(default=0)
+    
+    # Relationships
+    chapter: Chapter = Relationship(back_populates="entries")
+    speaker: Optional[Character] = Relationship(back_populates="scenario_entries")
+
+# --- Analysis & Patching Models (Non-Table) ---
+
+class CharacterReconResult(SQLModel):
     """
     Модель для 'умной разведки'.
     """
@@ -58,8 +146,7 @@ class CharacterReconResult(BaseModel):
         description="Список имен новых персонажей, которых не было в предоставленном списке."
     )
 
-
-class CharacterPatch(BaseModel):
+class CharacterPatch(SQLModel):
     """
     Патч изменений для персонажа. Отправляется LLM для анализа одной главы.
     """
@@ -125,252 +212,60 @@ class CharacterPatch(BaseModel):
                 raise ValueError("Для новых персонажей поле 'spoiler_free_description' обязательно.")
         return values
 
-
-class CharacterPatchList(BaseModel):
+class CharacterPatchList(SQLModel):
     patches: List[CharacterPatch]
 
+# --- Legacy Containers (For Transition) ---
 
-# --- Scenario Generation Models (Intermediate) ---
+class ChapterSummaryArchive(SQLModel):
+    """DEPRECATED: Используется для миграции старых JSON."""
+    summaries: Dict[str, ChapterSummary] = Field(default_factory=dict)
 
-class RawScenarioEntry(BaseModel):
-    """'Сырая' запись сценария (парсинг ответа)."""
+class CharacterArchive(SQLModel):
+    """DEPRECATED: Используется для миграции старых JSON."""
+    characters: List[Character]
+    processed_chapters: List[str] = Field(default_factory=list)
+
+class Scenario(SQLModel):
+    """DEPRECATED: Используется для миграции старых JSON."""
+    entries: List[ScenarioEntry]
+
+# --- Prompt Helpers ---
+
+class RawChapterSummary(SQLModel):
+    teaser: str = Field(..., description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
+    synopsis: str = Field(..., description="Детальный (100-150 слов) конспект для внутреннего использования. СОДЕРЖИТ спойлеры.")
+
+class RawScenarioEntry(SQLModel):
     id: UUID = Field(default_factory=uuid4)
     type: Literal["dialogue", "narration", "thought", "image"]
     speaker: Optional[str] = Field(None, description="Имя говорящего.")
     text: Optional[str] = Field(None, description="Текст реплики.")
-    src: Optional[str] = Field(None, description="Относительный путь к файл (только для типа image). Если картинки нет, НЕ СОЗДАВАЙ ЭТО ПОЛЕ")
+    src: Optional[str] = Field(None, description="Относительный путь к файл (только для типа image).")
 
-class RawScenario(BaseModel):
-    """Контейнер для 'сырого' сценария от LLM."""
+class RawScenario(SQLModel):
     scenario: List[RawScenarioEntry]
 
-
-# --- Sound Design Models ---
-
-class SoundDesignItem(BaseModel):
-    """
-    Результат работы звукорежиссера для одной записи сценария.
-    """
-    entry_id: str = Field(description="ID записи сценария.")
-    ambient: Optional[str] = Field(None, description="ID фонового звука. Если 'none' - ВООБЩЕ НЕ ВЫВОДИ поле.")
-    sfx: Optional[str] = Field(None, description="ID звукового эффекта. Если нет - ВООБЩЕ НЕ ВЫВОДИ поле.")
-
-
-class SoundDesignResult(BaseModel):
-    """Контейнер для списка звуковых решений."""
-    design: List[SoundDesignItem]
-
-
-# --- Emotion & Prosody Models ---
-
-class VoiceDirection(BaseModel):
-    instruct: str = Field(
-        description="Инструкция для диктора (до 5 слов), например: 'тихо, с грустью' или 'нагнетая саспенс'."
-    )
-    tts_text: Optional[str] = Field(
-        default=None,
-        description="ГЕНЕРИРОВАТЬ ТОЛЬКО ЕСЛИ НУЖНЫ ТЕГИ! Если текст произносится без тегов (<|pause|> и тд), ВООБЩЕ НЕ ВЫВОДИ ЭТО ПОЛЕ, чтобы сэкономить токены."
-    )
-
-class EmotionMap(BaseModel):
-    """Результат анализа эмоций."""
-    emotions: Dict[UUID, str]
-
-
-# --- Summary Models ---
-
-class RawChapterSummary(BaseModel):
-    """'Сырой' пересказ главы, как его возвращает LLM."""
-    teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер для пользователя. БЕЗ спойлеров.")
-    synopsis: str = Field(
-        description="Детальный (100-150 слов) конспект для внутреннего использования. СОДЕРЖИТ спойлеры.")
-
-
-class ChapterSummary(BaseModel):
-    """Хранит два вида пересказа для одной главы."""
-    chapter_id: str = Field(description="Уникальный идентификатор главы, например 'vol_1_chap_1'.")
-    teaser: str = Field(description="Краткий (40-60 слов), интригующий тизер.")
-    synopsis: str = Field(description="Детальный (100-150 слов) конспект.")
-
-class VolumeSummary(BaseModel):
-    """Глобальный пересказ целого тома."""
-    volume_num: int
-    summary: str = Field(description="Сжатый пересказ событий всего тома.")
-
-class ChapterSummaryArchive(BaseModel):
-    summaries: Dict[str, ChapterSummary] = Field(default_factory=dict)
-    volume_summaries: Dict[str, VolumeSummary] = Field(default_factory=dict)
-
-    def save(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data_to_save = {
-            "summaries": {k: s.model_dump() for k, s in self.summaries.items()},
-            "volume_summaries": {k: s.model_dump() for k, s in self.volume_summaries.items()}
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-
-    @classmethod
-    def load(cls, path: Path) -> ChapterSummaryArchive:
-        if not path.exists():
-            return cls()
-        data = json.loads(path.read_text("utf-8"))
-        summaries_obj = {k: ChapterSummary(**v) for k, v in data.get("summaries", {}).items()}
-        volume_obj = {k: VolumeSummary(**v) for k, v in data.get("volume_summaries", {}).items()}
-        return cls(summaries=summaries_obj, volume_summaries=volume_obj)
-
-
-# --- Final Scenario Models ---
-
-class ScenarioEntry(BaseModel):
-    """Представляет одну запись (строку) в финальном сценарии."""
-    id: UUID
-    type: Literal["dialogue", "narration", "thought", "image"]
-    text: Optional[str] = None
-    tts_text: Optional[str] = None
-    speaker: Optional[str] = None
-    instruct_prompt: str = Field("neutral")
-    ambient: str = "none"
-    sfx: Optional[str] = None
-    audio_file: Optional[str] = None
-    src: Optional[str] = None
-
-class Scenario(BaseModel):
-    """Полный сценарий для одной главы."""
-    entries: List[ScenarioEntry]
-
-    def save(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data_to_save = [entry.model_dump(mode='json', exclude_none=True) for entry in self.entries]
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        print(f"✅ Сценарий сохранен: {path}")
-
-    @classmethod
-    def load(cls, path: Path) -> Scenario:
-        if not path.exists():
-            raise FileNotFoundError(f"Файл сценария не найден: {path}")
-        return cls(entries=json.loads(path.read_text("utf-8")))
-
-
-# --- Character Archive Models ---
-
-class Character(BaseModel):
-    """
-    Полная информация о персонаже, собранная со всей книги.
-    """
-    id: UUID = Field(default_factory=uuid4)
-    name: str = Field(...)
-    entity_type: CharacterType = Field(default=CharacterType.PERSON)
-    aliases: List[str] = Field(default_factory=list)
-    gender: Optional[str] = Field(None)
-    # TODO Ссылка на другое я - на бущее!
-    related_identity_id: Optional[UUID] = Field(None)
-    role_tier: str = Field("background")
-    spoiler_free_description: str = Field(...)
-    description: str = Field(...)
-    visual_base: Optional[str] = Field(None)
-    voice_base: str = Field(default="")
-    voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict)
-    visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict)
-    chapter_mentions: Dict[str, str] = Field(default_factory=dict)
-
-class CharacterArchive(BaseModel):
-    characters: List[Character]
-    processed_chapters: List[str] = Field(default_factory=list)
-
-    def save(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        data_to_save = self.model_dump(mode='json')
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data_to_save, f, ensure_ascii=False, indent=2)
-        print(f"✅ Архив персонажей сохранен: {path}")
-
-    @classmethod
-    def load(cls, path: Path) -> CharacterArchive:
-        if not path.exists():
-            return cls(characters=[])
-        data = json.loads(path.read_text("utf-8"))
-        if isinstance(data, list):
-            return cls(characters=data)
-        return cls(**data)
-
-
-# --- Manifest Models ---
-
-class ManifestMeta(BaseModel):
-    """Метаданные книги."""
-    title: str = "Без названия"
-    author: Optional[str] = "Неизвестный автор"
-    description: Optional[str] = ""
-    tags: List[str] = Field(default_factory=list)
-    source_url: Optional[str] = ""
-    status: str = "ongoing"
-    version: str = "1.0"
-    total_duration_ms: int = 0
-    cover_image: Optional[str] = Field(None)
-    language: str = Field("ru")
-
-class ManifestChapterEntry(BaseModel):
-    """Одна запись в оглавлении (ToC)."""
-    order: int
-    title: str
-    vol: int = 1
-    chap: int
-    status: str = "draft"
-    path: Optional[str] = None
-    id: Optional[str] = None
-    src_dir: Optional[str] = None
-
-    @model_validator(mode='after')
-    def enforce_canonical_identifiers(self):
-        """
-        Гарантирует, что ID и src_dir соответствуют формату vol_X_chap_Y.
-        Перезаписывает любые левые данные.
-        """
-        canonical_id = f"vol_{self.vol}_chap_{self.chap}"
-        self.id = canonical_id
-        if not self.src_dir:
-            self.src_dir = canonical_id
-        return self
-
-class ManifestConfig(BaseModel):
-    """Технические настройки генерации (для бэкенда)."""
-    notes: Optional[str] = None
-    last_run_log: Optional[str] = None
-    default_narrator_voice: str = "narrator_default"
-    character_voices: Dict[UUID, str] = Field(default_factory=dict)
-
-class BookManifest(BaseModel):
-    """Корневой манифест проекта (V2)."""
-    project_id: str
-    meta: ManifestMeta
-    structure: List[ManifestChapterEntry] = Field(default_factory=list)
-    config: ManifestConfig = Field(default_factory=ManifestConfig)
-
-    def save(self, path: Path):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(self.model_dump_json(indent=2, exclude_defaults=True), encoding="utf-8")
-
-    @classmethod
-    def load(cls, path: Path) -> BookManifest:
-        if not path.exists():
-            raise FileNotFoundError(f"Манифест не найден: {path}. Запустите импорт книги!")
-        try:
-            return cls.model_validate_json(path.read_text("utf-8"))
-        except ValidationError as e:
-            print(f"ОШИБКА ВАЛИДАЦИИ МАНИФЕСТА: {e}")
-            raise
-
-# --- Display/Prompt Helpers ---
-
-class LlmRawScenarioEntry(BaseModel):
-    """Используется ТОЛЬКО для генерации схемы в промпте (без UUID)."""
+class LlmRawScenarioEntry(SQLModel):
     type: Literal["dialogue", "narration", "thought", "image"]
     speaker: Optional[str] = None
     text: Optional[str] = None
     src: Optional[str] = Field(None, description="Если это не image, ВООБЩЕ НЕ ВЫВОДИ ключ src")
 
-class LlmRawScenario(BaseModel):
-    """Используется ТОЛЬКО для генерации схемы в промпте."""
+class LlmRawScenario(SQLModel):
     scenario: List[LlmRawScenarioEntry]
+
+class SoundDesignItem(SQLModel):
+    entry_id: str = Field(description="ID записи сценария.")
+    ambient: Optional[str] = Field(None, description="ID фонового звука. Если 'none' - ВООБЩЕ НЕ ВЫВОДИ поле.")
+    sfx: Optional[str] = Field(None, description="ID звукового эффекта. Если нет - ВООБЩЕ НЕ ВЫВОДИ поле.")
+
+class SoundDesignResult(SQLModel):
+    design: List[SoundDesignItem]
+
+class VoiceDirection(SQLModel):
+    instruct: str = Field(description="Инструкция для диктора (до 5 слов), например: 'тихо, с грустью'.")
+    tts_text: Optional[str] = Field(default=None, description="Текст с тегами (ГЕНЕРИРОВАТЬ ТОЛЬКО ЕСЛИ НУЖНЫ ТЕГИ).")
+
+class EmotionMap(SQLModel):
+    emotions: Dict[UUID, VoiceDirection]

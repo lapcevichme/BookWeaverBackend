@@ -11,5 +11,6 @@ pygame==2.6.1
 python-dotenv==1.1.1
 requests==2.32.5
 soundfile==0.13.1
+sqlmodel==0.0.22
 stable-ts==2.19.1
 torch
