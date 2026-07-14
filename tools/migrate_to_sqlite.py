@@ -6,18 +6,21 @@ from sqlmodel import Session, select
 from core.database import engine, init_db
 from core.data_models import Book, Chapter, Character, ScenarioEntry, ChapterSummary, CharacterType
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 logger = logging.getLogger(__name__)
 
 def migrate():
     init_db()
     output_dir = Path("output")
+    input_dir = Path("input/books")
     
     if not output_dir.exists():
         logger.error("Папка output/ не найдена. Нечего мигрировать.")
         return
 
     with Session(engine) as session:
+        # Проходим по всем папкам книг в output
+        books_processed = 0
         for book_path in output_dir.iterdir():
             if not book_path.is_dir():
                 continue
@@ -26,10 +29,10 @@ def migrate():
             manifest_file = book_path / "manifest.json"
             
             if not manifest_file.exists():
-                logger.warning(f"Манифест не найден для {book_id}, пропускаем.")
+                logger.warning(f"  [SKIPPED] Манифест не найден для {book_id}")
                 continue
 
-            logger.info(f"Миграция книги: {book_id}")
+            logger.info(f">>> Миграция книги: {book_id}")
             
             # 1. Загружаем Манифест -> Книга
             with open(manifest_file, "r", encoding="utf-8") as f:
@@ -43,19 +46,20 @@ def migrate():
                     author=m_data.get("meta", {}).get("author"),
                     description=m_data.get("meta", {}).get("description"),
                     status=m_data.get("meta", {}).get("status", "ongoing"),
+                    cover_image_path=m_data.get("meta", {}).get("cover_image"),
                     tags=m_data.get("meta", {}).get("tags", []),
                     config=m_data.get("config", {})
                 )
                 session.add(book)
+                session.flush() # Чтобы ID книги был доступен для связей
             
             # 2. Персонажи
             char_archive_file = book_path / "character_archive.json"
-            char_map = {} # Нам понадобится для привязки сценария
+            char_name_to_id = {}
             
             if char_archive_file.exists():
                 with open(char_archive_file, "r", encoding="utf-8") as f:
                     c_data = json.load(f)
-                    # character_archive.json может быть либо списком, либо объектом с ключом 'characters'
                     characters_list = c_data.get("characters", []) if isinstance(c_data, dict) else c_data
                 
                 for c in characters_list:
@@ -79,10 +83,10 @@ def migrate():
                             chapter_mentions=c.get("chapter_mentions", {})
                         )
                         session.add(character)
-                    char_map[c["name"]] = char_id
+                    char_name_to_id[c["name"]] = char_id
+                logger.info(f"  - Загружено персонажей: {len(characters_list)}")
 
             # 3. Главы и Сценарии
-            # Сначала загрузим общие саммари, если они есть
             summaries_file = book_path / "chapter_summaries.json"
             all_summaries = {}
             if summaries_file.exists():
@@ -90,65 +94,100 @@ def migrate():
                     s_data = json.load(f)
                     all_summaries = s_data.get("summaries", {})
 
-            for chapter_item in m_data.get("structure", []):
-                chap_id = chapter_item["id"]
-                chapter = session.get(Chapter, chap_id)
+            chapters_list = m_data.get("structure", [])
+            for chapter_item in chapters_list:
+                local_chap_id = chapter_item["id"]
+                global_chap_id = f"{book_id}:{local_chap_id}" # Глобально уникальный ID
+                
+                # Парсим vol и chap из ID, если их нет
+                vol = chapter_item.get('vol')
+                chap = chapter_item.get('chap')
+                if vol is None or chap is None:
+                    import re
+                    match = re.search(r'vol_(\d+)_chap_(\d+)', local_chap_id)
+                    if match:
+                        vol = int(match.group(1))
+                        chap = int(match.group(2))
+                    else:
+                        vol = vol or 1
+                        chap = chap or 0
+                
+                # Пытаемся найти текст главы в input/books
+                raw_text = None
+                vol_dir = input_dir / book_id / f"vol_{vol}"
+                if vol_dir.exists():
+                    for ext in [".md", ".txt"]:
+                        text_path = vol_dir / f"chapter_{chap}{ext}"
+                        if text_path.exists():
+                            raw_text = text_path.read_text("utf-8")
+                            break
+
+                chapter = session.get(Chapter, global_chap_id)
                 if not chapter:
                     chapter = Chapter(
-                        id=chap_id,
+                        id=global_chap_id,
                         book_id=book_id,
-                        volume_num=chapter_item.get("vol", 1),
-                        chapter_num=chapter_item.get("chap"),
+                        chapter_id=local_chap_id,
+                        volume_num=vol,
+                        chapter_num=chap,
                         title=chapter_item.get("title"),
                         status=chapter_item.get("status", "draft"),
-                        order_index=chapter_item.get("order", 0)
+                        order_index=chapter_item.get("order", 0),
+                        raw_text=raw_text
                     )
                     session.add(chapter)
+                    session.flush()
                 
-                # Саммари главы
-                if chap_id in all_summaries:
-                    summ = all_summaries[chap_id]
-                    summary_obj = session.get(ChapterSummary, chap_id)
+                # Саммари
+                if local_chap_id in all_summaries:
+                    summ = all_summaries[local_chap_id]
+                    summary_obj = session.get(ChapterSummary, global_chap_id)
                     if not summary_obj:
                         summary_obj = ChapterSummary(
-                            chapter_id=chap_id,
+                            chapter_id=global_chap_id,
                             teaser=summ.get("teaser", ""),
                             synopsis=summ.get("synopsis", "")
                         )
                         session.add(summary_obj)
 
                 # Сценарий
-                scenario_file = book_path / chap_id / "scenario.json"
+                scenario_file = book_path / local_chap_id / "scenario.json"
                 if scenario_file.exists():
                     with open(scenario_file, "r", encoding="utf-8") as f:
                         entries_list = json.load(f)
                     
+                    entries_count = 0
                     for i, e in enumerate(entries_list):
                         e_id = UUID(e["id"]) if isinstance(e["id"], str) else e["id"]
                         entry = session.get(ScenarioEntry, e_id)
                         if not entry:
-                            # Ищем ID персонажа по имени
-                            speaker_id = char_map.get(e.get("speaker"))
+                            speaker_name = e.get("speaker")
+                            speaker_id = char_name_to_id.get(speaker_name)
                             
                             entry = ScenarioEntry(
                                 id=e_id,
-                                chapter_id=chap_id,
+                                chapter_id=global_chap_id, # Ссылка на глобальный ID главы
                                 speaker_id=speaker_id,
                                 type=e["type"],
                                 text=e.get("text"),
                                 tts_text=e.get("tts_text"),
-                                speaker_name=e.get("speaker"),
+                                speaker_name=speaker_name,
                                 instruct_prompt=e.get("instruct_prompt", "neutral"),
                                 ambient=e.get("ambient", "none"),
                                 sfx=e.get("sfx"),
-                                audio_file=e.get("audio_file"),
+                                audio_file=e.get("audio_file") or e.get("audio_file_path"),
                                 src=e.get("src"),
                                 order_index=i
                             )
                             session.add(entry)
+                            entries_count += 1
+                    # logger.info(f"    * Глава {local_chap_id}: {entries_count} реплик.")
             
             session.commit()
-            logger.info(f"Книга {book_id} успешно перенесена.")
+            books_processed += 1
+            logger.info(f"  [DONE] Книга {book_id} полностью перенесена.")
+
+    logger.info(f"\nМиграция завершена! Перенесено книг: {books_processed}")
 
 if __name__ == "__main__":
     migrate()

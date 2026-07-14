@@ -33,8 +33,9 @@ class ProjectContext:
         # --- Идентификаторы для БД ---
         self.book_id = self.book_name
         if volume_num is not None and chapter_num is not None:
-            self.chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
-            self.chapter_output_dir = self.book_output_dir / self.chapter_id
+            self.local_chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
+            self.chapter_id = f"{self.book_id}:{self.local_chapter_id}" # Глобально уникальный ID
+            self.chapter_output_dir = self.book_output_dir / self.local_chapter_id
             
             # Файлы
             md_path = self.book_dir / f"vol_{volume_num}" / f"chapter_{chapter_num}.md"

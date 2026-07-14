@@ -43,6 +43,24 @@ class CharacterVisualState(SQLModel):
 
 # --- Database Tables ---
 
+class Chapter(SQLModel, table=True):
+    """Таблица глав книги."""
+    id: str = Field(primary_key=True, description="Global Unique ID: {book_id}:{chapter_id}")
+    book_id: str = Field(foreign_key="book.id", index=True)
+    
+    volume_num: int = Field(default=1)
+    chapter_num: int
+    chapter_id: str = Field(description="Local ID: vol_X_chap_Y")
+    title: Optional[str] = None
+    status: str = Field(default="draft") # draft, scenario_ready, audio_ready
+    order_index: int = Field(default=0)
+    raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
+    
+    # Relationships
+    book: "Book" = Relationship(back_populates="chapters")
+    summary: Optional["ChapterSummary"] = Relationship(back_populates="chapter")
+    entries: List["ScenarioEntry"] = Relationship(back_populates="chapter")
+
 class Book(SQLModel, table=True):
     """Основная таблица книги/проекта."""
     id: str = Field(primary_key=True, description="Например: geroi-nashego-vremeni")
@@ -55,25 +73,8 @@ class Book(SQLModel, table=True):
     config: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     
     # Relationships
-    chapters: List["Chapter"] = Relationship(back_populates="book")
+    chapters: List["Chapter"] = Relationship(back_populates="book", sa_relationship_kwargs={"order_by": "Chapter.order_index"})
     characters: List["Character"] = Relationship(back_populates="book")
-
-class Chapter(SQLModel, table=True):
-    """Таблица глав книги."""
-    id: str = Field(primary_key=True, description="Canonical ID: vol_X_chap_Y")
-    book_id: str = Field(foreign_key="book.id", index=True)
-    
-    volume_num: int = Field(default=1)
-    chapter_num: int
-    title: Optional[str] = None
-    status: str = Field(default="draft") # draft, scenario_ready, audio_ready
-    order_index: int = Field(default=0)
-    raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
-    
-    # Relationships
-    book: Book = Relationship(back_populates="chapters")
-    summary: Optional["ChapterSummary"] = Relationship(back_populates="chapter")
-    entries: List["ScenarioEntry"] = Relationship(back_populates="chapter")
 
 class ChapterSummary(SQLModel, table=True):
     """Сводка/саммари главы."""
@@ -82,7 +83,7 @@ class ChapterSummary(SQLModel, table=True):
     synopsis: str = Field(sa_column=Column(Text), description="Детальный (100-150 слов) конспект для внутреннего использования. СОДЕРЖИТ спойлеры.")
     
     # Relationships
-    chapter: Chapter = Relationship(back_populates="summary")
+    chapter: "Chapter" = Relationship(back_populates="summary")
 
 class Character(SQLModel, table=True):
     """
@@ -107,7 +108,7 @@ class Character(SQLModel, table=True):
     chapter_mentions: Dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
     
     # Relationships
-    book: Book = Relationship(back_populates="characters")
+    book: "Book" = Relationship(back_populates="characters")
     scenario_entries: List["ScenarioEntry"] = Relationship(back_populates="speaker")
 
 class ScenarioEntry(SQLModel, table=True):
@@ -128,8 +129,8 @@ class ScenarioEntry(SQLModel, table=True):
     order_index: int = Field(default=0)
     
     # Relationships
-    chapter: Chapter = Relationship(back_populates="entries")
-    speaker: Optional[Character] = Relationship(back_populates="scenario_entries")
+    chapter: "Chapter" = Relationship(back_populates="entries")
+    speaker: Optional["Character"] = Relationship(back_populates="scenario_entries")
 
 # --- Analysis & Patching Models (Non-Table) ---
 

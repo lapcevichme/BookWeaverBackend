@@ -275,7 +275,8 @@ async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int
     from core.database import engine
     from core.data_models import ScenarioEntry
     
-    chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
+    context = ProjectContext(book_name, volume_num, chapter_num)
+    chapter_id = context.chapter_id
     
     with Session(engine) as session:
         statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == chapter_id).order_by(ScenarioEntry.order_index)
@@ -297,7 +298,7 @@ async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int
                     ambient=entry.ambient if entry.ambient != "none" else None
                 ))
 
-        return ChapterPlaylistResponse(
-            chapter_id=chapter_id,
-            entries=playlist_entries
-        )
+    return ChapterPlaylistResponse(
+        chapter_id=chapter_id,
+        entries=playlist_entries
+    )
