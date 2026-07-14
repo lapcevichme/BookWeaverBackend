@@ -112,10 +112,37 @@ class ScenarioGenerationPipeline:
             emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
                                                                    context.load_character_archive(), context.chapter_id)
 
-            # Сборка финального объекта
+            # Сборка финального объекта и сохранение в БД
+            with context.get_session() as session:
+                # 1. Удаляем старые записи главы, если они были (для идемпотентности)
+                from sqlmodel import delete
+                statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id)
+                existing_entries = session.exec(statement).all()
+                for e in existing_entries: session.delete(e)
+                
+                # 2. Добавляем новые
+                char_map = {char.name: char.id for char in context.load_character_archive().characters}
+                
+                for i, entry_data in enumerate(emotion_enriched_scenario):
+                    # Привязываем к персонажу по имени
+                    speaker_name = entry_data.get('speaker')
+                    speaker_id = char_map.get(speaker_name) if speaker_name else None
+                    
+                    entry = ScenarioEntry(
+                        **entry_data,
+                        chapter_id=context.chapter_id,
+                        speaker_id=speaker_id,
+                        speaker_name=speaker_name,
+                        order_index=i
+                    )
+                    session.add(entry)
+                
+                session.commit()
+            
+            # Legacy save (опционально, для совместимости пока)
             final_entries = [ScenarioEntry(**entry_data) for entry_data in emotion_enriched_scenario]
             final_scenario = Scenario(entries=final_entries)
-            final_scenario.save(context.scenario_file)
+            # final_scenario.save(context.scenario_file) # Можно закомментить, если уверен в БД
 
             self._update_manifest_status(context)
             metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")

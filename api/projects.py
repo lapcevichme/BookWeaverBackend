@@ -101,29 +101,49 @@ async def export_project(book_name: str):
 
 @router.get("/")
 async def list_projects():
-    """Сканирует директорию input/books и возвращает список всех книг (проектов)."""
-    books_dir = config.INPUT_DIR / "books"
-    if not books_dir.exists():
-        return []
-    return [d.name for d in books_dir.iterdir() if d.is_dir()]
+    """Возвращает список всех книг из базы данных."""
+    from sqlmodel import Session, select
+    from core.database import engine
+    from core.data_models import Book
+    
+    with Session(engine) as session:
+        statement = select(Book)
+        books = session.exec(statement).all()
+        return [b.id for b in books]
 
 
 @router.get("/{book_name}")
 async def get_project_details(book_name: str):
-    """Возвращает детальную информацию о книге: список глав и статус их обработки."""
-    context = ProjectContext(book_name=book_name)
-    if not context.book_dir.exists() or not context.book_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
+    """Возвращает детальную информацию о книге из БД."""
+    from sqlmodel import Session, select
+    from core.database import engine
+    from core.data_models import Book, Chapter
+    
+    with Session(engine) as session:
+        book = session.get(Book, book_name)
+        if not book:
+            raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
+        
+        # Получаем главы
+        statement = select(Chapter).where(Chapter.book_id == book_name).order_by(Chapter.order_index)
+        chapters = session.exec(statement).all()
+        
+        chapters_status = []
+        for chap in chapters:
+            # Для статуса проверяем наличие аудио на диске (пока гибридно)
+            ctx = ProjectContext(book_name, chap.volume_num, chap.chapter_num)
+            status = ctx.check_chapter_status()
+            # Дополняем данными из БД
+            status["title"] = chap.title
+            status["status"] = chap.status
+            chapters_status.append(status)
 
-    chapters_status = []
-
-    discovered_chapters = context.get_ordered_chapters()
-
-    for vol_num, chap_num in discovered_chapters:
-        chapter_context = ProjectContext(book_name, vol_num, chap_num)
-        chapters_status.append(chapter_context.check_chapter_status())
-
-    return {"book_name": book_name, "chapters": chapters_status}
+        return {
+            "book_id": book.id,
+            "title": book.title,
+            "author": book.author,
+            "chapters": chapters_status
+        }
 
 
 @router.get("/{book_name}/artifacts/{artifact_name}")
@@ -249,30 +269,35 @@ async def get_project_status(book_name: str):
 @router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/playlist", response_model=ChapterPlaylistResponse)
 async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int):
     """
-    Возвращает "плейлист" для главы, оптимизированный для мобильного плеера.
-    Клиент сначала запрашивает этот плейлист, а затем поочередно
-    запрашивает аудиофайлы и эмбиенты из него.
+    Возвращает "плейлист" для главы из БД.
     """
-    context = ProjectContext(book_name, volume_num, chapter_num)
+    from sqlmodel import Session, select
+    from core.database import engine
+    from core.data_models import ScenarioEntry
+    
+    chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
+    
+    with Session(engine) as session:
+        statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == chapter_id).order_by(ScenarioEntry.order_index)
+        entries = session.exec(statement).all()
+        
+        if not entries:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Сценарий для главы '{chapter_id}' не найден в БД."
+            )
 
-    scenario = context.load_scenario()
-    if not scenario:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Сценарий для главы '{context.chapter_id}' не найден. Невозможно создать плейлист."
+        playlist_entries = []
+        for entry in entries:
+            if entry.audio_file:
+                playlist_entries.append(PlaylistEntry(
+                    audio_file=entry.audio_file,
+                    text=entry.text,
+                    speaker=entry.speaker_name or "Narrator",
+                    ambient=entry.ambient if entry.ambient != "none" else None
+                ))
+
+        return ChapterPlaylistResponse(
+            chapter_id=chapter_id,
+            entries=playlist_entries
         )
-
-    playlist_entries = []
-    for entry in scenario.entries:
-        if entry.audio_file:
-            playlist_entries.append(PlaylistEntry(
-                audio_file=entry.audio_file,
-                text=entry.text,
-                speaker=entry.speaker,
-                ambient=entry.ambient if entry.ambient != "none" else None
-            ))
-
-    return ChapterPlaylistResponse(
-        chapter_id=context.chapter_id,
-        entries=playlist_entries
-    )
