@@ -101,28 +101,32 @@ async def export_project(book_name: str):
 
 @router.get("/")
 async def list_projects():
-    """Возвращает список всех книг из базы данных."""
-    from sqlmodel import Session, select
-    from core.database import engine
-    from core.data_models import Book
+    """Сканирует папку output и возвращает список проектов с базами данных."""
+    books_dir = config.OUTPUT_DIR
+    if not books_dir.exists():
+        return []
     
-    with Session(engine) as session:
-        statement = select(Book)
-        books = session.exec(statement).all()
-        return [b.id for b in books]
+    projects = []
+    for d in books_dir.iterdir():
+        if d.is_dir() and (d / "project.db").exists():
+            projects.append(d.name)
+    return sorted(projects)
 
 
 @router.get("/{book_name}")
 async def get_project_details(book_name: str):
-    """Возвращает детальную информацию о книге из БД."""
+    """Возвращает детали книги из её локальной БД."""
     from sqlmodel import Session, select
-    from core.database import engine
     from core.data_models import Book, Chapter
     
-    with Session(engine) as session:
+    context = ProjectContext(book_name=book_name)
+    if not (context.book_output_dir / "project.db").exists():
+        raise HTTPException(status_code=404, detail="База данных проекта не найдена.")
+    
+    with context.get_session() as session:
         book = session.get(Book, book_name)
         if not book:
-            raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
+            raise HTTPException(status_code=404, detail="Запись о книге не найдена в БД.")
         
         # Получаем главы
         statement = select(Chapter).where(Chapter.book_id == book_name).order_by(Chapter.order_index)
@@ -130,12 +134,9 @@ async def get_project_details(book_name: str):
         
         chapters_status = []
         for chap in chapters:
-            # Для статуса проверяем наличие аудио на диске (пока гибридно)
             ctx = ProjectContext(book_name, chap.volume_num, chap.chapter_num)
             status = ctx.check_chapter_status()
-            # Дополняем данными из БД
             status["title"] = chap.title
-            status["status"] = chap.status
             chapters_status.append(status)
 
         return {
@@ -269,23 +270,21 @@ async def get_project_status(book_name: str):
 @router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/playlist", response_model=ChapterPlaylistResponse)
 async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int):
     """
-    Возвращает "плейлист" для главы из БД.
+    Возвращает "плейлист" для главы из локальной БД книги.
     """
-    from sqlmodel import Session, select
-    from core.database import engine
-    from core.data_models import ScenarioEntry
+    from sqlmodel import select
+    from api.models import PlaylistEntry
     
     context = ProjectContext(book_name, volume_num, chapter_num)
-    chapter_id = context.chapter_id
     
-    with Session(engine) as session:
-        statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == chapter_id).order_by(ScenarioEntry.order_index)
+    with context.get_session() as session:
+        statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id).order_by(ScenarioEntry.order_index)
         entries = session.exec(statement).all()
         
         if not entries:
             raise HTTPException(
                 status_code=404,
-                detail=f"Сценарий для главы '{chapter_id}' не найден в БД."
+                detail=f"Сценарий для главы '{context.chapter_id}' не найден в БД проекта."
             )
 
         playlist_entries = []
@@ -298,7 +297,7 @@ async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int
                     ambient=entry.ambient if entry.ambient != "none" else None
                 ))
 
-    return ChapterPlaylistResponse(
-        chapter_id=chapter_id,
-        entries=playlist_entries
-    )
+        return ChapterPlaylistResponse(
+            chapter_id=context.chapter_id,
+            entries=playlist_entries
+        )
