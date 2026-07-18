@@ -51,7 +51,12 @@ class CharacterAnalysisPipeline:
                 update_progress(1.0, "Ошибка", "В манифесте проекта не найдено глав.")
                 return
 
-            master_archive = context.load_character_archive()
+            master_archive = CharacterArchive(characters=[])
+            with context.get_session() as session:
+                from sqlmodel import select
+                chars = session.exec(select(Character).where(Character.book_id == book_name)).all()
+                master_archive.characters = chars
+            
             summary_archive = context.load_summary_archive()
 
             total_chapters = len(ordered_chapters)
@@ -76,7 +81,8 @@ class CharacterAnalysisPipeline:
                 if not chapter_text.strip():
                     logger.warning(f"⚠️ Текст главы {chapter_id} пуст. Отмечаем как обработанную.")
                     self._mark_chapter_processed(master_archive, chapter_id)
-                    master_archive.save(context.get_character_archive_path())
+                    # Обновляем статус в БД
+                    chapter_ctx.update_chapter_status("processed")
                     continue
 
                 chapter_summary_text = None
@@ -91,7 +97,7 @@ class CharacterAnalysisPipeline:
                 if not recon_result or (not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names):
                     logger.info(f"В главе {chapter_id} персонажи не обнаружены.")
                     self._mark_chapter_processed(master_archive, chapter_id)
-                    master_archive.save(context.get_character_archive_path())
+                    chapter_ctx.update_chapter_status("processed")
                     continue
 
                 relevant_chars = self._filter_archive_by_ids(master_archive, recon_result.mentioned_existing_character_ids)
@@ -110,7 +116,11 @@ class CharacterAnalysisPipeline:
                     master_archive = self._add_empty_mentions(master_archive, recon_result.mentioned_existing_character_ids, chapter_id)
 
                 self._mark_chapter_processed(master_archive, chapter_id)
-                master_archive.save(context.get_character_archive_path())
+                
+                # СОХРАНЕНИЕ В БД
+                context.save_characters(master_archive.characters)
+                chapter_ctx.update_chapter_status("processed")
+                
                 metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")

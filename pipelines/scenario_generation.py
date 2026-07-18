@@ -79,54 +79,61 @@ class ScenarioGenerationPipeline:
             context.ensure_dirs()
             metrics_collector.start_chapter(context.chapter_id)
 
-            # Текстовый слой сценария
-            if context.raw_scenario_cache_file.exists():
-                update_progress(0.2, "Генерация", "Используется кэш 'сырого' сценария.")
-                raw_scenario = RawScenario.model_validate_json(context.raw_scenario_cache_file.read_text("utf-8"))
+            # 1. Текстовый слой сценария
+            raw_cache = context.get_cache("raw_scenario")
+            if raw_cache:
+                update_progress(0.2, "Генерация", "Используется кэш из БД.")
+                raw_scenario = RawScenario.model_validate(raw_cache)
             else:
                 update_progress(0.2, "Генерация", "Генерация текста сценария (LLM)...")
-                contextual_characters = self._get_contextual_characters(context.load_character_archive(),
-                                                                        context.chapter_id)
+                # Загружаем персонажей из БД
+                with context.get_session() as session:
+                    from sqlmodel import select
+                    from core.data_models import Character
+                    chars = session.exec(select(Character).where(Character.book_id == context.book_id)).all()
+                    contextual_characters = CharacterArchive(characters=chars)
 
                 raw_scenario = self._generate_raw_scenario(context, contextual_characters,
                                                            context.load_summary_archive(), update_progress)
                 if not raw_scenario:
                     raise ValueError("Ошибка генерации raw scenario.")
 
-                context.raw_scenario_cache_file.write_text(raw_scenario.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
+                context.set_cache("raw_scenario", raw_scenario.model_dump(mode='json', exclude_none=True))
 
             scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
-            # Звуковой слой (Ambient + SFX)
-            if context.ambient_cache_file.exists():
-                update_progress(0.55, "Звук", "Используется кэш звукового дизайна.")
-                sound_enriched_scenario = json.loads(context.ambient_cache_file.read_text("utf-8"))
+            # 2. Звуковой слой (Ambient + SFX)
+            ambient_cache = context.get_cache("ambient")
+            if ambient_cache:
+                update_progress(0.55, "Звук", "Используется кэш звуков из БД.")
+                sound_enriched_scenario = ambient_cache
             else:
                 update_progress(0.55, "Звук", "Анализ звукового оформления (Ambient + SFX)...")
                 sound_enriched_scenario = self._enrich_sound_design(scenario_as_dicts)
-                context.ambient_cache_file.write_text(json.dumps(sound_enriched_scenario, indent=2, ensure_ascii=False),
-                                                      encoding="utf-8")
+                context.set_cache("ambient", sound_enriched_scenario)
 
-            # Instruct & tts_text
+            # 3. Instruct & tts_text
             update_progress(0.75, "Эмоции", "Анализ интонаций, пауз и генерация режиссерских инструкций...")
-            emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
-                                                                   context.load_character_archive(), context.chapter_id)
-
-            # Сборка финального объекта и сохранение в БД
+            
+            # Снова подгружаем персонажей для эмоций
             with context.get_session() as session:
-                # 1. Удаляем старые записи главы, если они были (для идемпотентности)
+                chars = session.exec(select(Character).where(Character.book_id == context.book_id)).all()
+                contextual_characters = CharacterArchive(characters=chars)
+            
+            emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
+                                                                   contextual_characters, context.chapter_id)
+
+            # 4. Сборка и сохранение в БД
+            with context.get_session() as session:
                 from sqlmodel import delete
-                statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id)
-                existing_entries = session.exec(statement).all()
-                for e in existing_entries: session.delete(e)
+                # Очищаем старое
+                session.exec(delete(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id))
                 
-                # 2. Добавляем новые
-                char_map = {char.name: char.id for char in context.load_character_archive().characters}
+                char_map = {char.name: char.id for char in contextual_characters.characters}
                 
                 for i, entry_data in enumerate(emotion_enriched_scenario):
-                    # Привязываем к персонажу по имени
                     speaker_name = entry_data.get('speaker')
-                    speaker_id = char_map.get(speaker_name) if speaker_name else None
+                    speaker_id = char_map.get(speaker_name)
                     
                     entry = ScenarioEntry(
                         **entry_data,
@@ -137,14 +144,13 @@ class ScenarioGenerationPipeline:
                     )
                     session.add(entry)
                 
+                # Обновляем статус главы в той же транзакции
+                from core.data_models import Chapter
+                db_chap = session.get(Chapter, context.chapter_id)
+                if db_chap: db_chap.status = "scenario_ready"
+                
                 session.commit()
             
-            # Legacy save (опционально, для совместимости пока)
-            final_entries = [ScenarioEntry(**entry_data) for entry_data in emotion_enriched_scenario]
-            final_scenario = Scenario(entries=final_entries)
-            # final_scenario.save(context.scenario_file) # Можно закомментить, если уверен в БД
-
-            self._update_manifest_status(context)
             metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
             update_progress(1.0, "Завершено", "Готово!")
 

@@ -104,17 +104,37 @@ class ProjectContext:
             "has_audio": has_audio
         }
 
-    def get_chapter_text(self) -> str:
-        """Загружает текст главы (с диска или из БД)."""
-        # Пробуем из БД
+    def get_cache(self, name: str) -> Optional[Any]:
+        """Получает кэш из БД."""
         db_chap = self.load_chapter()
-        if db_chap and db_chap.raw_text:
-            return db_chap.raw_text
-            
-        # Fallback на диск
-        if not hasattr(self, 'chapter_file') or not self.chapter_file.exists():
-            raise FileNotFoundError(f"Файл главы не найден: {self.book_name} {self.chapter_id}")
-        return self.chapter_file.read_text("utf-8")
+        if not db_chap: return None
+        return getattr(db_chap, f"cache_{name}", None)
+
+    def set_cache(self, name: str, data: Any):
+        """Сохраняет кэш в БД."""
+        with self.get_session() as session:
+            db_chap = session.get(Chapter, self.chapter_id)
+            if db_chap:
+                setattr(db_chap, f"cache_{name}", data)
+                session.add(db_chap)
+                session.commit()
+
+    def update_chapter_status(self, status: str):
+        """Обновляет статус главы в БД."""
+        with self.get_session() as session:
+            db_chap = session.get(Chapter, self.chapter_id)
+            if db_chap:
+                db_chap.status = status
+                session.add(db_chap)
+                session.commit()
+
+    def save_characters(self, characters: List[Character]):
+        """Сохраняет или обновляет персонажей в БД."""
+        with self.get_session() as session:
+            for char in characters:
+                char.book_id = self.book_id # Гарантируем привязку
+                session.merge(char) # merge создаст новый или обновит старый по ID
+            session.commit()
 
     # --- Legacy (пока используются в пайплайнах) ---
     def load_manifest(self) -> BookManifest:
