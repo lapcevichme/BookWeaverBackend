@@ -46,17 +46,21 @@ class TTSPipeline:
                 if not tts_service.cosy_client.check_health():
                     logger.warning("⚠️ Не удается достучаться до CosyVoice API. Проверьте Docker-контейнер!")
 
-            update_progress(0.04, stage, "Загрузка файла сценария...")
-            scenario = context.load_scenario()
-            if not scenario:
-                raise FileNotFoundError(f"Файл сценария не найден для главы {context.chapter_id}.")
+            update_progress(0.04, stage, "Загрузка данных из БД...")
+            with context.get_session() as session:
+                from sqlmodel import select
+                from core.data_models import ScenarioEntry, Character
+                
+                scenario_entries = session.exec(
+                    select(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id).order_by(ScenarioEntry.order_index)
+                ).all()
+                
+                if not scenario_entries:
+                    raise FileNotFoundError(f"Записи сценария не найдены в БД для главы {context.chapter_id}.")
 
-            update_progress(0.06, stage, "Загрузка манифеста книги...")
-            manifest = context.load_manifest()
-
-            update_progress(0.08, stage, "Загрузка архива персонажей...")
-            character_archive = context.load_character_archive()
-            char_name_to_id_map = {char.name: char.id for char in character_archive.characters}
+                manifest = context.load_manifest()
+                chars = session.exec(select(Character).where(Character.book_id == context.book_id)).all()
+                char_name_to_id_map = {char.name: char.id for char in chars}
 
             update_progress(0.1, stage, "Все данные успешно загружены.")
 
@@ -68,13 +72,13 @@ class TTSPipeline:
 
             subtitles_data = []
             total_duration_ms = 0
-            total_entries = len(scenario.entries)
+            total_entries = len(scenario_entries)
 
             if total_entries == 0:
                 update_progress(1.0, "Завершено", "Сценарий не содержит реплик для озвучивания.")
                 return
 
-            for i, entry in enumerate(scenario.entries):
+            for i, entry in enumerate(scenario_entries):
                 progress = 0.1 + (0.8 * (i / total_entries))
 
                 if entry.type == "image":
@@ -88,7 +92,7 @@ class TTSPipeline:
                 audio_filename = f"{entry.id}.wav"
                 audio_path = audio_output_dir / audio_filename
 
-                character_name = entry.speaker
+                character_name = entry.speaker_name
                 voice_id = None
 
                 if character_name == "Рассказчик" or not character_name:
