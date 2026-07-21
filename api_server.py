@@ -59,7 +59,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="BookWeaver AI Backend",
     description="Локальный сервер для выполнения тяжелых AI-задач.",
-    version="1.0.0",
+    version="1.1.0",
     lifespan=lifespan
 )
 

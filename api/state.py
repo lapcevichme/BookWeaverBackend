@@ -61,13 +61,21 @@ def run_task_wrapper(task_id: str, target_func, **kwargs):
     try:
         background_tasks[task_id]["status"] = "processing"
         progress_callback = lambda p, s, m: update_task_progress(task_id, p, s, m)
+        
+        # Передаем callback в функцию
         kwargs["progress_callback"] = progress_callback
+        
+        logger.info(f"🚀 Задача {task_id} запущена ({target_func.__name__})")
         target_func(**kwargs)
+        
         background_tasks[task_id]["status"] = "complete"
+        background_tasks[task_id]["progress"] = 1.0
+        background_tasks[task_id]["message"] = "Задача успешно завершена."
+        logger.info(f"✅ Задача {task_id} завершена.")
     except Exception as e:
-        logger.error(f"ОШИБКА в задаче {task_id}: {e}", exc_info=True)
+        logger.error(f"❌ ОШИБКА в задаче {task_id}: {e}", exc_info=True)
         background_tasks[task_id]["status"] = "failed"
-        background_tasks[task_id]["message"] = f"Критическая ошибка: {e}"
+        background_tasks[task_id]["message"] = f"Ошибка: {str(e)}"
         background_tasks[task_id]["stage"] = "Ошибка"
 
 

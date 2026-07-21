@@ -1,6 +1,9 @@
 from pydantic import BaseModel, Field
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict, Any
 from enum import Enum
+from uuid import UUID
+
+# --- Server State ---
 
 class ServerStateEnum(str, Enum):
     INITIALIZING = "INITIALIZING"
@@ -10,6 +13,8 @@ class ServerStateEnum(str, Enum):
 class ServerStatus(BaseModel):
     status: ServerStateEnum
     message: str = ""
+
+# --- Tasks ---
 
 class ChapterTaskRequest(BaseModel):
     book_name: str
@@ -26,14 +31,18 @@ class TaskStatusResponse(BaseModel):
     stage: str
     message: str
 
+# --- Artifacts & Metadata ---
+
 class BookArtifactName(str, Enum):
-    manifest = "manifest"
-    character_archive = "character_archive"
-    summary_archive = "summary_archive"
+    MANIFEST = "manifest"
+    CHARACTER_ARCHIVE = "character_archive"
+    CHAPTER_SUMMARIES = "summary_archive"
 
 class ChapterArtifactName(str, Enum):
-    scenario = "scenario"
-    subtitles = "subtitles"
+    SCENARIO = "scenario"
+    SUBTITLES = "subtitles"
+    CACHE_RAW_SCENARIO = "cache_raw_scenario"
+    CACHE_AMBIENT = "cache_ambient"
 
 class AmbientMetadata(BaseModel):
     id: str
@@ -50,15 +59,24 @@ class BookStatusResponse(BaseModel):
         description="True, если хотя бы одна глава полностью готова (сценарий + TTS)."
     )
 
+# --- UI / Streaming ---
+
 class PlaylistEntry(BaseModel):
     """Одна запись в плейлисте главы, соответствует одной реплике."""
-    audio_file: str = Field(description="Имя аудиофайла (например, 'narrator_001.wav').")
-    text: str = Field(description="Текст реплики.")
+    id: Optional[UUID] = None
+    audio_file: Optional[str] = Field(None, description="Имя аудиофайла.")
+    text: Optional[str] = Field(None, description="Текст реплики.")
     speaker: str = Field(description="Имя говорящего персонажа.")
-    ambient: Optional[str] = Field(None, description="ID эмбиент-звука (например, 'forest_day_calm').")
+    ambient: Optional[str] = Field(None, description="ID эмбиент-звука.")
 
 class ChapterPlaylistResponse(BaseModel):
     """Модель ответа для плейлиста главы."""
     chapter_id: str
     entries: List[PlaylistEntry]
 
+class UpdateScenarioEntryRequest(BaseModel):
+    text: Optional[str] = None
+    tts_text: Optional[str] = None
+    instruct_prompt: Optional[str] = None
+    ambient: Optional[str] = None
+    sfx: Optional[str] = None

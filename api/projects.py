@@ -2,102 +2,32 @@ import shutil
 import json
 import os
 import logging
+from typing import List, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, UploadFile, File, Request
+from fastapi import APIRouter, HTTPException, UploadFile, File, Request, Query
 from fastapi.responses import FileResponse
+from sqlmodel import Session, select
 
 import config
 from core.project_context import ProjectContext
+from core.data_models import Book, Chapter, Character, ScenarioEntry, ChapterSummary
+from api.models import (
+    BookArtifactName, ChapterArtifactName, BookStatusResponse, 
+    ChapterPlaylistResponse, PlaylistEntry, UpdateScenarioEntryRequest
+)
 from utils.book_converter import BookConverter
-from api.models import BookArtifactName, ChapterArtifactName, BookStatusResponse, ChapterPlaylistResponse, PlaylistEntry
 from utils.exporter import BookExporter
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(
     prefix="/api/v1/projects",
-    tags=["Projects & Files API"]
+    tags=["Projects Management"]
 )
 
 
-# Project Lifecycle
-
-@router.post("/import")
-async def import_project(file: UploadFile = File(...)):
-    """
-    Загружает файл книги (.txt, .epub) и преобразует его в структуру проекта.
-    """
-    temp_dir = config.BASE_DIR / "temp_uploads"
-    temp_dir.mkdir(exist_ok=True)
-    temp_file_path = temp_dir / file.filename
-    try:
-        contents = await file.read()
-        with open(temp_file_path, "wb") as buffer:
-            buffer.write(contents)
-
-        converter = BookConverter(input_file=temp_file_path)
-        converter.convert()
-        project_name = temp_file_path.stem
-        return {"message": f"Проект '{project_name}' успешно импортирован."}
-    except FileExistsError as e:
-        raise HTTPException(status_code=409, detail=str(e))
-    except NotImplementedError as e:
-        raise HTTPException(status_code=415, detail=str(e))
-    except Exception as e:
-        project_name = temp_file_path.stem
-        project_path = config.INPUT_DIR / "books" / project_name
-        if project_path.exists():
-            shutil.rmtree(project_path)
-        raise HTTPException(status_code=500, detail=f"Не удалось обработать книгу: {e}")
-    finally:
-        if temp_file_path.exists():
-            temp_file_path.unlink()
-
-
-
-@router.get("/{book_name}/export", response_class=FileResponse)
-async def export_project(book_name: str):
-    """
-    Собирает готовый проект в .bw архив и отдает его для скачивания.
-    """
-    # TODO: тут ввели логику, что должно быть аудио, но наверное достаточно манифеста (подумать)
-    context = ProjectContext(book_name=book_name)
-    if not context.book_dir.exists() or not context.book_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
-
-    discovered_chapters = context.get_ordered_chapters()
-    chapters_with_tts = 0
-    if discovered_chapters:
-        for vol_num, chap_num in discovered_chapters:
-            chapter_context = ProjectContext(book_name, vol_num, chap_num)
-            chapter_status = chapter_context.check_chapter_status()
-            if chapter_status.get('has_audio'):
-                chapters_with_tts += 1
-
-    if chapters_with_tts == 0:
-        raise HTTPException(
-            status_code=412,
-            detail="Проект не готов к экспорту. Нет ни одной полностью озвученной главы."
-        )
-
-    try:
-        exporter = BookExporter(book_name=book_name)
-        archive_path = exporter.export()
-
-        return FileResponse(
-            path=archive_path,
-            filename=archive_path.name,
-            media_type='application/zip'
-        )
-    except FileNotFoundError as e:
-        logger.error(f"Ошибка экспорта: {e}")
-        raise HTTPException(status_code=404, detail=f"Не удалось найти необходимые файлы для экспорта проекта '{book_name}'.")
-    except Exception as e:
-        logger.error(f"Критическая ошибка при экспорте проекта '{book_name}': {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера при создании архива: {e}")
-
-
-# Project Details & Artifacts
+# --- Project Discovery ---
 
 @router.get("/")
 async def list_projects():
@@ -116,9 +46,6 @@ async def list_projects():
 @router.get("/{book_name}")
 async def get_project_details(book_name: str):
     """Возвращает детали книги из её локальной БД."""
-    from sqlmodel import Session, select
-    from core.data_models import Book, Chapter
-    
     context = ProjectContext(book_name=book_name)
     if not (context.book_output_dir / "project.db").exists():
         raise HTTPException(status_code=404, detail="База данных проекта не найдена.")
@@ -137,6 +64,7 @@ async def get_project_details(book_name: str):
             ctx = ProjectContext(book_name, chap.volume_num, chap.chapter_num)
             status = ctx.check_chapter_status()
             status["title"] = chap.title
+            status["status"] = chap.status
             chapters_status.append(status)
 
         return {
@@ -146,6 +74,64 @@ async def get_project_details(book_name: str):
             "chapters": chapters_status
         }
 
+
+# --- Scenario Editing (For Web UI) ---
+
+@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/entries")
+async def get_chapter_entries(
+    book_name: str, 
+    volume_num: int, 
+    chapter_num: int,
+    offset: int = 0,
+    limit: int = 100
+):
+    """Возвращает записи сценария для главы с поддержкой пагинации."""
+    context = ProjectContext(book_name, volume_num, chapter_num)
+    with context.get_session() as session:
+        statement = select(ScenarioEntry).where(
+            ScenarioEntry.chapter_id == context.chapter_id
+        ).order_by(ScenarioEntry.order_index).offset(offset).limit(limit)
+        
+        entries = session.exec(statement).all()
+        return entries
+
+
+@router.patch("/{book_name}/entries/{entry_id}")
+async def update_scenario_entry(
+    book_name: str, 
+    entry_id: UUID, 
+    req: UpdateScenarioEntryRequest
+):
+    """Обновляет одну запись сценария в БД книги."""
+    context = ProjectContext(book_name=book_name)
+    with context.get_session() as session:
+        entry = session.get(ScenarioEntry, entry_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Запись не найдена.")
+        
+        # Обновляем только переданные поля
+        update_data = req.model_dump(exclude_unset=True)
+        for key, value in update_data.items():
+            setattr(entry, key, value)
+            
+        session.add(entry)
+        session.commit()
+        session.refresh(entry)
+        return entry
+
+
+# --- Characters Management ---
+
+@router.get("/{book_name}/characters")
+async def get_book_characters(book_name: str):
+    """Возвращает список всех персонажей книги."""
+    context = ProjectContext(book_name=book_name)
+    with context.get_session() as session:
+        statement = select(Character).where(Character.book_id == book_name)
+        return session.exec(statement).all()
+
+
+# --- Artifacts (Compatibility & Downloads) ---
 
 @router.get("/{book_name}/artifacts/{artifact_name}")
 async def get_book_artifact(book_name: str, artifact_name: BookArtifactName):
@@ -159,175 +145,59 @@ async def get_book_artifact(book_name: str, artifact_name: BookArtifactName):
     elif artifact_name == BookArtifactName.CHAPTER_SUMMARIES:
         return context.load_summary_archive()
         
-    # Fallback для других файлов (например, cover)
-    artifact_path = getattr(context, f"{artifact_name.value}_file", None)
-    if not artifact_path or not artifact_path.exists():
-        raise HTTPException(status_code=404, detail=f"Артефакт '{artifact_name.value}' не найден.")
-    return FileResponse(artifact_path)
+    raise HTTPException(status_code=404, detail="Артефакт не найден.")
 
 
-@router.post("/{book_name}/artifacts/{artifact_name}")
-async def update_book_artifact(book_name: str, artifact_name: BookArtifactName, request: Request):
-    """
-    Обновляет данные артефакта в БД.
-    """
-    context = ProjectContext(book_name=book_name)
+# --- Project Actions ---
+
+@router.post("/import")
+async def import_project(file: UploadFile = File(...)):
+    """Загружает и конвертирует новую книгу."""
+    temp_dir = config.BASE_DIR / "temp_uploads"
+    temp_dir.mkdir(exist_ok=True)
+    temp_file_path = temp_dir / file.filename
     try:
-        new_data = await request.json()
-        
-        if artifact_name == BookArtifactName.MANIFEST:
-            # Обновляем Book и Chapters из пришедшего манифеста
-            from core.data_models import Book, Chapter
-            with context.get_session() as session:
-                book = session.get(Book, book_name)
-                if book:
-                    book.title = new_data.get("meta", {}).get("title", book.title)
-                    book.author = new_data.get("meta", {}).get("author", book.author)
-                    book.config = new_data.get("config", book.config)
-                    session.add(book)
-                session.commit()
-            return {"message": "Манифест успешно обновлен в БД."}
-            
-        elif artifact_name == BookArtifactName.CHARACTER_ARCHIVE:
-            from core.data_models import Character
-            chars_data = new_data.get("characters", []) if isinstance(new_data, dict) else new_data
-            characters = [Character(**c) for c in chars_data]
-            context.save_characters(characters)
-            return {"message": "Персонажи успешно обновлены в БД."}
-            
-        return {"message": "Этот тип артефакта пока не поддерживает обновление через БД."}
-        
+        contents = await file.read()
+        with open(temp_file_path, "wb") as buffer:
+            buffer.write(contents)
+
+        converter = BookConverter(input_file=temp_file_path)
+        converter.convert()
+        return {"message": f"Проект '{temp_file_path.stem}' успешно импортирован."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при обновлении БД: {e}")
+        logger.error(f"Import error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if temp_file_path.exists(): temp_file_path.unlink()
 
 
-@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/artifacts/{artifact_name}")
-async def get_chapter_artifact(book_name: str, volume_num: int, chapter_num: int, artifact_name: ChapterArtifactName):
-    """Возвращает данные артефакта уровня главы из БД."""
-    context = ProjectContext(book_name=book_name, volume_num=volume_num, chapter_num=chapter_num)
-    
-    if artifact_name == ChapterArtifactName.SCENARIO:
-        scenario = context.load_scenario()
-        if not scenario: raise HTTPException(status_code=404, detail="Сценарий не найден.")
-        return scenario
-        
-    # Кэши
-    cache_data = context.get_cache(artifact_name.value.replace("cache_", ""))
-    if cache_data:
-        return cache_data
-
-    raise HTTPException(status_code=404, detail=f"Артефакт {artifact_name.value} не найден в БД.")
-
-
-# Mobile App / Streaming Endpoints
-
-@router.post("/{book_name}/cover")
-async def upload_cover(book_name: str, file: UploadFile = File(...)):
-    """Загружает или обновляет обложку для проекта."""
-    context = ProjectContext(book_name=book_name)
-    if not context.book_dir.exists():
-        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
-
-    allowed_extensions = {".jpg", ".jpeg", ".png"}
-    file_ext = os.path.splitext(file.filename)[1].lower()
-    if file_ext not in allowed_extensions:
-        raise HTTPException(status_code=415, detail="Поддерживаются только .jpg и .png файлы.")
-
+@router.get("/{book_name}/export", response_class=FileResponse)
+async def export_project(book_name: str):
+    """Собирает .bw архив для мобилки."""
     try:
-        with open(context.cover_file, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-        return {"message": "Обложка успешно загружена."}
+        exporter = BookExporter(book_name=book_name)
+        archive_path = exporter.export()
+        if not archive_path:
+            raise HTTPException(status_code=500, detail="Ошибка при создании архива.")
+        return FileResponse(path=archive_path, filename=archive_path.name)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Не удалось сохранить файл обложки: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
+
+# --- Media ---
 
 @router.get("/{book_name}/cover")
 async def get_cover(book_name: str):
-    """Отдает файл обложки книги для отображения в клиенте."""
     context = ProjectContext(book_name=book_name)
     if not context.cover_file.exists():
-        raise HTTPException(status_code=404, detail="Обложка для этой книги не найдена.")
-
-    return FileResponse(context.cover_file, media_type="image/jpeg")
+        raise HTTPException(status_code=404, detail="Обложка не найдена.")
+    return FileResponse(context.cover_file)
 
 
 @router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/audio/{audio_file_name}")
-async def get_chapter_audio_file(book_name: str, volume_num: int, chapter_num: int, audio_file_name: str):
-    """Отдает конкретный аудиофайл из главы для стриминга."""
+async def get_audio_file(book_name: str, volume_num: int, chapter_num: int, audio_file_name: str):
     context = ProjectContext(book_name, volume_num, chapter_num)
-    audio_file_path = context.chapter_audio_dir / audio_file_name
-
-    if not audio_file_path.exists():
-        raise HTTPException(status_code=404, detail="Аудиофайл не найден.")
-
-    return FileResponse(audio_file_path, media_type="audio/wav")
-
-
-@router.get("/{book_name}/status", response_model=BookStatusResponse)
-async def get_project_status(book_name: str):
-    """
-    Возвращает агрегированную сводку о готовности всего проекта.
-    Быстро сканирует артефакты всех глав.
-    """
-    context = ProjectContext(book_name=book_name)
-    if not context.book_dir.exists() or not context.book_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Проект (книга) не найден.")
-
-    status = BookStatusResponse(book_name=book_name)
-
-    discovered_chapters = context.get_ordered_chapters()
-    status.total_chapters = len(discovered_chapters)
-
-    if status.total_chapters == 0:
-        return status  # Возвращаем пустой статус, если глав нет
-
-    for vol_num, chap_num in discovered_chapters:
-        chapter_context = ProjectContext(book_name, vol_num, chap_num)
-        chapter_status = chapter_context.check_chapter_status()
-
-        if chapter_status.get('has_scenario'):
-            status.chapters_with_scenario += 1
-        if chapter_status.get('has_audio'):
-            status.chapters_with_tts += 1
-
-    # Проект готов к экспорту, если хотя бы одна глава полностью готова
-    status.is_ready_for_export = status.chapters_with_tts > 0
-
-    return status
-
-# Streaming
-
-@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/playlist", response_model=ChapterPlaylistResponse)
-async def get_chapter_playlist(book_name: str, volume_num: int, chapter_num: int):
-    """
-    Возвращает "плейлист" для главы из локальной БД книги.
-    """
-    from sqlmodel import select
-    from api.models import PlaylistEntry
-    
-    context = ProjectContext(book_name, volume_num, chapter_num)
-    
-    with context.get_session() as session:
-        statement = select(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id).order_by(ScenarioEntry.order_index)
-        entries = session.exec(statement).all()
-        
-        if not entries:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Сценарий для главы '{context.chapter_id}' не найден в БД проекта."
-            )
-
-        playlist_entries = []
-        for entry in entries:
-            if entry.audio_file:
-                playlist_entries.append(PlaylistEntry(
-                    audio_file=entry.audio_file,
-                    text=entry.text,
-                    speaker=entry.speaker_name or "Narrator",
-                    ambient=entry.ambient if entry.ambient != "none" else None
-                ))
-
-        return ChapterPlaylistResponse(
-            chapter_id=context.chapter_id,
-            entries=playlist_entries
-        )
+    path = context.chapter_audio_dir / audio_file_name
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден.")
+    return FileResponse(path)
