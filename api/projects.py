@@ -149,8 +149,17 @@ async def get_project_details(book_name: str):
 
 @router.get("/{book_name}/artifacts/{artifact_name}")
 async def get_book_artifact(book_name: str, artifact_name: BookArtifactName):
-    """Возвращает содержимое артефакта уровня книги (например, manifest.json)."""
+    """Возвращает данные артефакта уровня книги из БД."""
     context = ProjectContext(book_name=book_name)
+    
+    if artifact_name == BookArtifactName.MANIFEST:
+        return context.load_manifest()
+    elif artifact_name == BookArtifactName.CHARACTER_ARCHIVE:
+        return context.load_character_archive()
+    elif artifact_name == BookArtifactName.CHAPTER_SUMMARIES:
+        return context.load_summary_archive()
+        
+    # Fallback для других файлов (например, cover)
     artifact_path = getattr(context, f"{artifact_name.value}_file", None)
     if not artifact_path or not artifact_path.exists():
         raise HTTPException(status_code=404, detail=f"Артефакт '{artifact_name.value}' не найден.")
@@ -160,33 +169,54 @@ async def get_book_artifact(book_name: str, artifact_name: BookArtifactName):
 @router.post("/{book_name}/artifacts/{artifact_name}")
 async def update_book_artifact(book_name: str, artifact_name: BookArtifactName, request: Request):
     """
-    Обновляет (перезаписывает) артефакт уровня книги (например, manifest.json).
-    Принимает JSON в теле запроса.
+    Обновляет данные артефакта в БД.
     """
     context = ProjectContext(book_name=book_name)
-    artifact_path = getattr(context, f"{artifact_name.value}_file", None)
-    if not artifact_path:
-        raise HTTPException(status_code=400, detail=f"Неверное имя артефакта: {artifact_name.value}")
     try:
-        new_content = await request.json()
-        with open(artifact_path, 'w', encoding='utf-8') as f:
-            json.dump(new_content, f, ensure_ascii=False, indent=4)
-        return {"message": f"Артефакт '{artifact_name.value}' для книги '{book_name}' успешно обновлен."}
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=400, detail="Неверный формат JSON.")
+        new_data = await request.json()
+        
+        if artifact_name == BookArtifactName.MANIFEST:
+            # Обновляем Book и Chapters из пришедшего манифеста
+            from core.data_models import Book, Chapter
+            with context.get_session() as session:
+                book = session.get(Book, book_name)
+                if book:
+                    book.title = new_data.get("meta", {}).get("title", book.title)
+                    book.author = new_data.get("meta", {}).get("author", book.author)
+                    book.config = new_data.get("config", book.config)
+                    session.add(book)
+                session.commit()
+            return {"message": "Манифест успешно обновлен в БД."}
+            
+        elif artifact_name == BookArtifactName.CHARACTER_ARCHIVE:
+            from core.data_models import Character
+            chars_data = new_data.get("characters", []) if isinstance(new_data, dict) else new_data
+            characters = [Character(**c) for c in chars_data]
+            context.save_characters(characters)
+            return {"message": "Персонажи успешно обновлены в БД."}
+            
+        return {"message": "Этот тип артефакта пока не поддерживает обновление через БД."}
+        
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка при записи файла: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при обновлении БД: {e}")
 
 
 @router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/artifacts/{artifact_name}")
 async def get_chapter_artifact(book_name: str, volume_num: int, chapter_num: int, artifact_name: ChapterArtifactName):
-    """Возвращает содержимое артефакта уровня главы (например, scenario.json)."""
+    """Возвращает данные артефакта уровня главы из БД."""
     context = ProjectContext(book_name=book_name, volume_num=volume_num, chapter_num=chapter_num)
-    artifact_path = getattr(context, f"{artifact_name.value}_file", None)
-    if not artifact_path or not artifact_path.exists():
-        raise HTTPException(status_code=404, detail=f"Артефакт '{artifact_name.value}' не найден.")
+    
+    if artifact_name == ChapterArtifactName.SCENARIO:
+        scenario = context.load_scenario()
+        if not scenario: raise HTTPException(status_code=404, detail="Сценарий не найден.")
+        return scenario
+        
+    # Кэши
+    cache_data = context.get_cache(artifact_name.value.replace("cache_", ""))
+    if cache_data:
+        return cache_data
 
-    return FileResponse(artifact_path, media_type="application/json")
+    raise HTTPException(status_code=404, detail=f"Артефакт {artifact_name.value} не найден в БД.")
 
 
 # Mobile App / Streaming Endpoints

@@ -161,14 +161,9 @@ class ScenarioGenerationPipeline:
 
     def _update_manifest_status(self, context: ProjectContext):
         try:
-            manifest = context.load_manifest()
-            for chapter in manifest.structure:
-                if chapter.id == context.chapter_id and chapter.status != "audio_ready":
-                    chapter.status = "scenario_ready"
-                    manifest.save(context.manifest_file)
-                    break
+            context.update_chapter_status("scenario_ready")
         except Exception as e:
-            logger.warning(f"Не удалось обновить статус в манифесте: {e}")
+            logger.warning(f"Не удалось обновить статус в БД: {e}")
 
     def _get_contextual_characters(self, archive: CharacterArchive, chapter_id: str) -> CharacterArchive:
         relevant_chars = [

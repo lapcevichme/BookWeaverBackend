@@ -136,30 +136,83 @@ class ProjectContext:
                 session.merge(char) # merge создаст новый или обновит старый по ID
             session.commit()
 
-    # --- Legacy (пока используются в пайплайнах) ---
-    def load_manifest(self) -> BookManifest:
-        return BookManifest.load(self.manifest_file)
-    def load_character_archive(self) -> CharacterArchive:
-        return CharacterArchive.load(self.character_archive_file)
-    def load_summary_archive(self) -> ChapterSummaryArchive:
-        return ChapterSummaryArchive.load(self.summary_archive_file)
-    def load_scenario(self) -> Scenario | None:
-        if not hasattr(self, 'scenario_file'): return None
-        try: return Scenario.load(self.scenario_file)
-        except: return None
+    # --- Database Loaders (Single Source of Truth) ---
 
-    def get_audio_output_dir(self) -> Path:
-        return self.chapter_audio_dir
-    def get_voice_path(self, voice_id: str) -> Path:
-        return config.VOICES_DIR / voice_id / "reference.wav"
-    def get_subtitles_file(self) -> Path:
-        return self.subtitles_file
-    def get_character_archive_path(self) -> Path:
-        return self.character_archive_file
-    def get_summary_archive_path(self) -> Path:
-        return self.summary_archive_file
+    def load_manifest(self) -> BookManifest:
+        """Реконструирует Манифест из данных БД."""
+        from core.data_models import ManifestMeta, ManifestChapterEntry, ManifestConfig
+        
+        book = self.load_book()
+        if not book:
+            raise ValueError(f"Книга {self.book_id} не найдена в БД.")
+            
+        meta = ManifestMeta(
+            title=book.title,
+            author=book.author,
+            description=book.description,
+            tags=book.tags,
+            status=book.status
+        )
+        
+        with self.get_session() as session:
+            db_chapters = session.exec(
+                select(Chapter).where(Chapter.book_id == self.book_id).order_by(Chapter.order_index)
+            ).all()
+            
+            structure = [
+                ManifestChapterEntry(
+                    order=c.order_index,
+                    title=c.title or f"Глава {c.chapter_num}",
+                    vol=c.volume_num,
+                    chap=c.chapter_num,
+                    status=c.status,
+                    id=c.id
+                ) for c in db_chapters
+            ]
+            
+        return BookManifest(
+            project_id=self.book_id,
+            meta=meta,
+            structure=structure,
+            config=ManifestConfig(**book.config)
+        )
+
+    def load_character_archive(self) -> CharacterArchive:
+        """Загружает персонажей из БД."""
+        with self.get_session() as session:
+            chars = session.exec(select(Character).where(Character.book_id == self.book_id)).all()
+            # Находим список обработанных глав (тех, где есть упоминания)
+            processed = set()
+            for c in chars:
+                processed.update(c.chapter_mentions.keys())
+            
+            return CharacterArchive(characters=chars, processed_chapters=list(processed))
+
+    def load_summary_archive(self) -> ChapterSummaryArchive:
+        """Загружает все саммари глав из БД."""
+        with self.get_session() as session:
+            # Нам нужно достать все ChapterSummary для глав этой книги
+            statement = select(ChapterSummary).join(Chapter).where(Chapter.book_id == self.book_id)
+            summaries = session.exec(statement).all()
+            return ChapterSummaryArchive(summaries={s.chapter_id: s for s in summaries})
+
+    def load_scenario(self) -> Scenario | None:
+        """Загружает сценарий главы из БД."""
+        entries = self.load_scenario_entries()
+        if not entries: return None
+        return Scenario(entries=entries)
 
     def get_ordered_chapters(self) -> List[Tuple[int, int]]:
+        """Возвращает список (vol, chap), приоритет БД."""
+        with self.get_session() as session:
+            db_chapters = session.exec(
+                select(Chapter).where(Chapter.book_id == self.book_id).order_by(Chapter.order_index)
+            ).all()
+            
+            if db_chapters:
+                return [(c.volume_num, c.chapter_num) for c in db_chapters]
+        
+        # Если в БД пусто (новый проект) - сканим файлы
         chapter_paths = file_utils.get_all_chapters(self.book_dir)
         return [file_utils.parse_vol_chap_from_path(p) for p in chapter_paths]
 

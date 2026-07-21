@@ -98,7 +98,8 @@ class ImageGenerationPipeline:
                                 relative_path = f"images/{safe_name}"
                                 task['state_obj'].reference_image_path = relative_path
                                 generated_count += 1
-                                archive.save(context.get_character_archive_path())
+                                # Сохраняем прогресс в БД
+                                context.save_characters(archive.characters)
                             break
                 else:
                     logger.warning(f"⚠️ Не удалось получить результат для {char_name}")

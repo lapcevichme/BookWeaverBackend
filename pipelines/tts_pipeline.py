@@ -260,17 +260,12 @@ class TTSPipeline:
             self.model_manager.unload_service("tts_service")
 
     def _update_manifest_status(self, context: ProjectContext):
-        """Обновляет статус главы на 'audio_ready'."""
+        """Обновляет статус главы на 'audio_ready' в БД."""
         try:
-            manifest = context.load_manifest()
-            for chapter in manifest.structure:
-                if chapter.id == context.chapter_id:
-                    chapter.status = "audio_ready"
-                    manifest.save(context.manifest_file)
-                    logger.info(f"Статус главы обновлен: {chapter.id} -> audio_ready")
-                    break
+            context.update_chapter_status("audio_ready")
+            logger.info(f"Статус главы обновлен: {context.chapter_id} -> audio_ready")
         except Exception as e:
-            logger.warning(f"⚠️ Не удалось обновить статус манифеста: {e}")
+            logger.warning(f"⚠️ Не удалось обновить статус главы в БД: {e}")
 
     def _create_subtitle_entry(self, audio_file, text, start_time_ms, duration_ms, word_timings):
         """Формирует запись для JSON-субтитров."""

@@ -77,12 +77,13 @@ class BookExporter:
         self.temp_build_dir.mkdir(parents=True, exist_ok=True)
 
         try:
-            logger.info("Экспорт метаданных...")
+            logger.info("Экспорт метаданных из БД...")
 
             manifest = self.context.load_manifest()
+            characters = self.context.load_character_archive()
 
-            if self.context.character_archive_file.exists():
-                shutil.copy2(self.context.character_archive_file, self.temp_build_dir / "characters.json")
+            # Сохраняем персонажей в архив
+            self._write_json(characters.model_dump(mode='json'), "characters.json")
 
             used_ambients = set()
             successful_chapters = set()
