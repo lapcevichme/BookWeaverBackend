@@ -4,7 +4,8 @@
 import logging
 from typing import Optional, Callable
 from pathlib import Path
-from core.project_context import ProjectContext
+from core.book_repository import BookRepository
+from core import path_manager
 from services.comfy_service import ComfyService
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,9 @@ class ImageGenerationPipeline:
         self.comfy_service = ComfyService()
         logger.info("✅ Пайплайн ImageGenerationPipeline инициализирован.")
 
-    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None, quality: str = "fast"):
+    def run(self, book_name: str, 
+            progress_callback: Optional[Callable[[float, str, str], None]] = None, 
+            quality: str = "fast"):
         """
         Проходит по архиву персонажей и генерирует изображения.
         Параметр `quality` может быть "fast" (быстрые скетчи) или "hq" (детализированные).
@@ -29,8 +32,9 @@ class ImageGenerationPipeline:
             update_progress(0.0, "Ошибка", "Сервер ComfyUI недоступен (127.0.0.1:8188). Запустите ComfyUI!")
             return
 
+        repo = BookRepository(book_name)
         update_progress(0.0, "Старт", "Загрузка архива персонажей...")
-        archive = context.load_character_archive()
+        archive = repo.get_character_archive()
 
         tasks = []
         for char in archive.characters:
@@ -54,10 +58,12 @@ class ImageGenerationPipeline:
         generated_count = 0
         pony_quality_tags = "score_9, score_8_up, score_7_up, score_6_up, source_anime, "
         pony_negative = "ugly, bad quality, blurry, score_6, score_5, score_4"
+        
+        images_dir = path_manager.get_book_output_dir(book_name) / "images"
+        images_dir.mkdir(parents=True, exist_ok=True)
 
         for i, task in enumerate(tasks):
             char_name = task['char_name']
-
             prompt = pony_quality_tags + task['prompt']
 
             if quality == "fast":
@@ -88,7 +94,7 @@ class ImageGenerationPipeline:
 
                             ext = Path(filename).suffix
                             safe_name = f"{task['char_id']}_{task['chapter']}{ext}"
-                            save_path = context.images_dir / safe_name
+                            save_path = images_dir / safe_name
 
                             success = self.comfy_service.download_and_save_image(
                                 filename, subfolder, folder_type, save_path
@@ -99,7 +105,7 @@ class ImageGenerationPipeline:
                                 task['state_obj'].reference_image_path = relative_path
                                 generated_count += 1
                                 # Сохраняем прогресс в БД
-                                context.save_characters(archive.characters)
+                                repo.save_characters(archive.characters)
                             break
                 else:
                     logger.warning(f"⚠️ Не удалось получить результат для {char_name}")

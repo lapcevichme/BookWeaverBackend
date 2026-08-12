@@ -11,7 +11,6 @@ from core.data_models import (
     CharacterPatchList,
     EmotionMap, RawChapterSummary, ChapterSummary, LlmRawScenario
 )
-from core.project_context import ProjectContext
 from utils.prompt_utils import generate_human_schema
 
 
@@ -43,7 +42,8 @@ def format_volume_summary_prompt(volume_num: int, chapter_summaries: List[str]) 
 
 
 def format_summary_generation_prompt(
-        context: ProjectContext,
+        chapter_text: str,
+        chapter_id: str,
         previous_summaries: list[ChapterSummary],
         prev_volume_summary: Optional[str] = None
 ) -> str:
@@ -83,8 +83,8 @@ def format_summary_generation_prompt(
 ФОРМАТ ОТВЕТА (JSON):
 {schema_description}
 
-ТЕКСТ ГЛАВЫ:
-{context.get_chapter_text()}
+ТЕКСТ ГЛАВЫ (ID: {chapter_id}):
+{chapter_text}
 
 ТВОЙ ОТВЕТ (ТОЛЬКО JSON):
 """

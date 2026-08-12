@@ -16,7 +16,8 @@ from core.data_models import (
     ChapterSummaryArchive,
     SoundDesignResult
 )
-from core.project_context import ProjectContext
+from core.book_repository import BookRepository
+from core import path_manager
 from pipelines import prompts
 from services.model_manager import ModelManager
 from utils.metrics import metrics_collector
@@ -38,96 +39,93 @@ class ScenarioGenerationPipeline:
 
     def _load_libraries(self):
         """
-        Загружает библиотеки эмбиента и SFX из конфигурационных файлов.
-        Жёсткие списки эмоций удалены в Архитектуре 2.0 (переход на Instruct).
+        Загружает библиотеки эмбиента и SFX из системной БД.
         """
-        logger.info("Загрузка библиотек звукового дизайна...")
+        logger.info("Загрузка библиотек звукового дизайна из БД...")
+        from core.database import get_system_session
+        from core.system_models import AmbientTrack, SFXTrack
+        from sqlmodel import select
 
         try:
-            if config.AMBIENT_LIBRARY_FILE.exists():
-                self.ambient_library = json.loads(config.AMBIENT_LIBRARY_FILE.read_text("utf-8"))
-            else:
-                logger.warning(f"Файл библиотеки эмбиента не найден: {config.AMBIENT_LIBRARY_FILE}")
-                self.ambient_library = []
-        except json.JSONDecodeError as e:
-            logger.warning(f"Ошибка чтения библиотеки эмбиента: {e}")
-            self.ambient_library = []
-
-        self.sfx_library = {}
-        try:
-            if config.SFX_LIBRARY_FILE.exists():
-                self.sfx_library = json.loads(config.SFX_LIBRARY_FILE.read_text("utf-8"))
-                logger.info(f"Загружено SFX сэмплов: {len(self.sfx_library)}")
-            else:
-                logger.warning("⚠️ Библиотека SFX не найдена. Генерация SFX будет пропущена.")
+            with get_system_session() as session:
+                self.ambient_library = [
+                    {"id": t.id, "description": t.description, "tags": t.tags}
+                    for t in session.exec(select(AmbientTrack)).all()
+                ]
+                self.sfx_library = {
+                    t.id: t.description for t in session.exec(select(SFXTrack)).all()
+                }
+                logger.info(f"Загружено из БД: {len(self.ambient_library)} эмбиентов, {len(self.sfx_library)} SFX.")
         except Exception as e:
-            logger.warning(f"⚠️ Ошибка чтения SFX библиотеки: {e}")
+            logger.error(f"❌ Ошибка загрузки библиотек из БД: {e}")
+            self.ambient_library = []
+            self.sfx_library = {}
 
-    def run(self, context: ProjectContext, progress_callback: Optional[Callable[[float, str, str], None]] = None):
+    def run(self, book_name: str, volume_num: int, chapter_num: int,
+            progress_callback: Optional[Callable[[float, str, str], None]] = None):
         """
         Запускает полный процесс генерации сценария: текст -> звуки -> эмоции + просодия.
         """
+        chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
 
         def update_progress(progress: float, stage: str, message: str):
             if progress_callback:
                 progress_callback(progress, stage, message)
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
 
-        update_progress(0.0, "Начало", f"Запуск генерации сценария для главы {context.chapter_id}")
+        update_progress(0.0, "Начало", f"Запуск генерации сценария для главы {chapter_id}")
 
         try:
-            context.ensure_dirs()
-            metrics_collector.start_chapter(context.chapter_id)
+            repo = BookRepository(book_name)
+            path_manager.ensure_chapter_dirs(book_name, chapter_id)
+            metrics_collector.start_chapter(f"{book_name}:{chapter_id}")
 
             # 1. Текстовый слой сценария
-            raw_cache = context.get_cache("raw_scenario")
+            raw_cache = repo.get_cache(chapter_id, "raw_scenario")
             if raw_cache:
                 update_progress(0.2, "Генерация", "Используется кэш из БД.")
                 raw_scenario = RawScenario.model_validate(raw_cache)
             else:
                 update_progress(0.2, "Генерация", "Генерация текста сценария (LLM)...")
                 # Загружаем персонажей из БД
-                with context.get_session() as session:
-                    from sqlmodel import select
-                    from core.data_models import Character
-                    chars = session.exec(select(Character).where(Character.book_id == context.book_id)).all()
-                    contextual_characters = CharacterArchive(characters=chars)
+                chars = repo.get_characters()
+                contextual_characters = CharacterArchive(characters=chars)
 
-                raw_scenario = self._generate_raw_scenario(context, contextual_characters,
-                                                           context.load_summary_archive(), update_progress)
+                raw_scenario = self._generate_raw_scenario(repo, chapter_id, contextual_characters,
+                                                           repo.get_summary_archive(), update_progress)
                 if not raw_scenario:
                     raise ValueError("Ошибка генерации raw scenario.")
 
-                context.set_cache("raw_scenario", raw_scenario.model_dump(mode='json', exclude_none=True))
+                repo.set_cache(chapter_id, "raw_scenario", raw_scenario.model_dump(mode='json', exclude_none=True))
 
             scenario_as_dicts = [entry.model_dump(mode='json') for entry in raw_scenario.scenario]
 
             # 2. Звуковой слой (Ambient + SFX)
-            ambient_cache = context.get_cache("ambient")
+            ambient_cache = repo.get_cache(chapter_id, "ambient")
             if ambient_cache:
                 update_progress(0.55, "Звук", "Используется кэш звуков из БД.")
                 sound_enriched_scenario = ambient_cache
             else:
                 update_progress(0.55, "Звук", "Анализ звукового оформления (Ambient + SFX)...")
                 sound_enriched_scenario = self._enrich_sound_design(scenario_as_dicts)
-                context.set_cache("ambient", sound_enriched_scenario)
+                repo.set_cache(chapter_id, "ambient", sound_enriched_scenario)
 
             # 3. Instruct & tts_text
             update_progress(0.75, "Эмоции", "Анализ интонаций, пауз и генерация режиссерских инструкций...")
             
             # Снова подгружаем персонажей для эмоций
-            with context.get_session() as session:
-                chars = session.exec(select(Character).where(Character.book_id == context.book_id)).all()
-                contextual_characters = CharacterArchive(characters=chars)
+            chars = repo.get_characters()
+            contextual_characters = CharacterArchive(characters=chars)
             
             emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
-                                                                   contextual_characters, context.chapter_id)
+                                                                   contextual_characters, chapter_id)
 
             # 4. Сборка и сохранение в БД
-            with context.get_session() as session:
-                from sqlmodel import delete
+            with repo.get_session() as session:
+                from sqlmodel import delete, select
+                from core.data_models import ScenarioEntry, Chapter
                 # Очищаем старое
-                session.exec(delete(ScenarioEntry).where(ScenarioEntry.chapter_id == context.chapter_id))
+                session.exec(delete(ScenarioEntry).where(ScenarioEntry.chapter_id == chapter_id))
                 
                 char_map = {char.name: char.id for char in contextual_characters.characters}
                 
@@ -137,16 +135,15 @@ class ScenarioGenerationPipeline:
                     
                     entry = ScenarioEntry(
                         **entry_data,
-                        chapter_id=context.chapter_id,
+                        chapter_id=chapter_id,
                         speaker_id=speaker_id,
                         speaker_name=speaker_name,
                         order_index=i
                     )
                     session.add(entry)
                 
-                # Обновляем статус главы в той же транзакции
-                from core.data_models import Chapter
-                db_chap = session.get(Chapter, context.chapter_id)
+                # Обновляем статус главы
+                db_chap = session.get(Chapter, chapter_id)
                 if db_chap: db_chap.status = "scenario_ready"
                 
                 session.commit()
@@ -159,22 +156,10 @@ class ScenarioGenerationPipeline:
             logger.error(f"❌ Error: {e}", exc_info=True)
             raise e
 
-    def _update_manifest_status(self, context: ProjectContext):
-        try:
-            context.update_chapter_status("scenario_ready")
-        except Exception as e:
-            logger.warning(f"Не удалось обновить статус в БД: {e}")
-
-    def _get_contextual_characters(self, archive: CharacterArchive, chapter_id: str) -> CharacterArchive:
-        relevant_chars = [
-            char for char in archive.characters
-            if chapter_id in char.chapter_mentions or char.role_tier in ['protagonist', 'major']
-        ]
-        return CharacterArchive(characters=relevant_chars)
-
     def _generate_raw_scenario(
             self,
-            context: ProjectContext,
+            repo: BookRepository,
+            chapter_id: str,
             archive: CharacterArchive,
             summary_archive: ChapterSummaryArchive,
             progress_callback: Optional[Callable] = None
@@ -184,8 +169,8 @@ class ScenarioGenerationPipeline:
         """
         llm = self.model_manager.get_llm_service('scenario_generator')
 
-        full_text = context.get_chapter_text()
-        chapter_data = summary_archive.summaries.get(context.chapter_id)
+        full_text = repo.get_chapter_text(chapter_id)
+        chapter_data = summary_archive.summaries.get(chapter_id)
         synopsis = chapter_data.synopsis if chapter_data else None
 
         chunk_size = getattr(config, 'SCENARIO_CHUNK_SIZE', 10000)
