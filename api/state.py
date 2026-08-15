@@ -4,7 +4,7 @@ import secrets
 from pathlib import Path
 from typing import Dict, Any
 
-from fastapi import BackgroundTasks, HTTPException
+from fastapi import HTTPException
 
 from api.models import ServerStatus, ServerStateEnum, TaskStatusResponse
 
@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 SERVER_STATUS = ServerStatus(status=ServerStateEnum.INITIALIZING, message="Server is starting up...")
 model_manager = ModelManager()
 app_pipelines: Application | None = None
-background_tasks: Dict[str, Dict[str, Any]] = {}
 
 TOKEN_FILE = Path(".server_token")
 
@@ -46,49 +45,22 @@ def get_or_create_server_token() -> str:
 SERVER_TOKEN = get_or_create_server_token()
 
 
-# Фоновые задачи
-
-def update_task_progress(task_id: str, progress: float, stage: str, message: str):
-    """Обновляет статус задачи."""
-    if task_id in background_tasks:
-        background_tasks[task_id]["progress"] = progress
-        background_tasks[task_id]["stage"] = stage
-        background_tasks[task_id]["message"] = message
-
-
-def run_task_wrapper(task_id: str, target_func, **kwargs):
-    """Обертка для выполнения задачи в фоне с обработкой ошибок."""
-    try:
-        background_tasks[task_id]["status"] = "processing"
-        progress_callback = lambda p, s, m: update_task_progress(task_id, p, s, m)
-        
-        # Передаем callback в функцию
-        kwargs["progress_callback"] = progress_callback
-        
-        logger.info(f"🚀 Задача {task_id} запущена ({target_func.__name__})")
-        target_func(**kwargs)
-        
-        background_tasks[task_id]["status"] = "complete"
-        background_tasks[task_id]["progress"] = 1.0
-        background_tasks[task_id]["message"] = "Задача успешно завершена."
-        logger.info(f"✅ Задача {task_id} завершена.")
-    except Exception as e:
-        logger.error(f"❌ ОШИБКА в задаче {task_id}: {e}", exc_info=True)
-        background_tasks[task_id]["status"] = "failed"
-        background_tasks[task_id]["message"] = f"Ошибка: {str(e)}"
-        background_tasks[task_id]["stage"] = "Ошибка"
-
-
-def start_task(target_func, background_tasks_runner: BackgroundTasks, **kwargs):
-    """Запускает новую фоновую задачу и возвращает ее ID."""
+from core.task_queue import add_task, get_task, list_tasks, TaskRecord
+...
+def start_task(task_type: str, book_id: str, **kwargs):
+    """Запускает новую фоновую задачу через SQLite очередь."""
     if SERVER_STATUS.status != ServerStateEnum.READY:
         raise HTTPException(status_code=503, detail=f"Server is not ready. Current state: {SERVER_STATUS.status}")
     if app_pipelines is None:
         raise HTTPException(status_code=500, detail="AI Pipelines are not initialized due to a startup error.")
 
-    task_id = str(uuid.uuid4())
-    background_tasks[task_id] = {
-        "status": "queued", "progress": 0.0, "stage": "В очереди", "message": "Задача поставлена в очередь."
-    }
-    background_tasks_runner.add_task(run_task_wrapper, task_id, target_func, **kwargs)
-    return TaskStatusResponse(task_id=task_id, **background_tasks[task_id])
+    task_id = add_task(book_id=book_id, task_type=task_type, **kwargs)
+    task_rec = get_task(task_id)
+    
+    return TaskStatusResponse(
+        task_id=task_id,
+        status=task_rec.status,
+        progress=task_rec.progress,
+        stage=task_rec.stage,
+        message=task_rec.message
+    )

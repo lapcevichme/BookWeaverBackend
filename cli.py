@@ -5,6 +5,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Tuple, Optional
 
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
@@ -12,7 +13,6 @@ if project_root not in sys.path:
 
 from main import Application
 from services.model_manager import ModelManager
-from core.project_context import ProjectContext
 from utils.setup_logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -72,34 +72,34 @@ class BookWeaverCLI:
 
     def run_summary_generation(self):
         book_name = input("Введите название книги (имя папки): ")
-        if book_name: self.app.summary_pipeline.run(ProjectContext(book_name))
+        if book_name: self.app.summary_pipeline.run(book_name)
 
     def run_image_generation(self):
         book_name = input("Введите название книги (имя папки): ")
         if book_name:
             print("Запускаем пайплайн генерации изображений...")
-            ctx = ProjectContext(book_name)
-            ctx.ensure_dirs()
-            self.app.image_pipeline.run(ctx)
+            self.app.image_pipeline.run(book_name=book_name)
 
     def run_scenario_generation(self):
-        context = self._get_chapter_context_from_user()
-        if context: self.app.scenario_pipeline.run(context)
+        info = self._get_chapter_info_from_user()
+        if info:
+            b, v, c = info
+            self.app.scenario_pipeline.run(book_name=b, volume_num=v, chapter_num=c)
 
     def run_tts_synthesis(self):
-        context = self._get_chapter_context_from_user()
-        if context: self.app.tts_pipeline.run(context)
+        info = self._get_chapter_info_from_user()
+        if info:
+            b, v, c = info
+            self.app.tts_pipeline.run(book_name=b, volume_num=v, chapter_num=c)
 
-    def _get_chapter_context_from_user(self) -> ProjectContext | None:
+    def _get_chapter_info_from_user(self) -> Optional[Tuple[str, int, int]]:
         try:
             book_name = input("Книга: ")
             vol = int(input("Том: "))
             chap = int(input("Глава: "))
-            ctx = ProjectContext(book_name, vol, chap)
-            ctx.get_chapter_text()
-            return ctx
+            return book_name, vol, chap
         except Exception as e:
-            print(f"Ошибка контекста: {e}")
+            print(f"Ошибка ввода: {e}")
             return None
 
     def main_menu(self):

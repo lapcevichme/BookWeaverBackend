@@ -80,3 +80,21 @@ class UpdateScenarioEntryRequest(BaseModel):
     instruct_prompt: Optional[str] = None
     ambient: Optional[str] = None
     sfx: Optional[str] = None
+
+class UpdateCharacterRequest(BaseModel):
+    name: Optional[str] = None
+    entity_type: Optional[str] = None
+    gender: Optional[str] = None
+    role_tier: Optional[str] = None
+    spoiler_free_description: Optional[str] = None
+    description: Optional[str] = None
+    visual_base: Optional[str] = None
+    voice_base: Optional[str] = None
+    aliases: Optional[List[str]] = None
+
+class UpdateBookRequest(BaseModel):
+    title: Optional[str] = None
+    author: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[str] = None
+    tags: Optional[List[str]] = None

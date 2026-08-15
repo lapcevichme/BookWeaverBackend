@@ -1,3 +1,4 @@
+from typing import Dict
 from fastapi import APIRouter, HTTPException
 
 from api import state
@@ -14,10 +15,203 @@ async def health_check():
     return state.SERVER_STATUS
 
 
+from core.task_queue import get_task, list_tasks
+
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """Возвращает прогресс фоновой задачи."""
-    task = state.background_tasks.get(task_id)
+    task = get_task(task_id)
     if not task:
         raise HTTPException(status_code=404, detail="Задача не найдена.")
-    return TaskStatusResponse(task_id=task_id, **task)
+    return TaskStatusResponse(
+        task_id=task.id,
+        status=task.status,
+        progress=task.progress,
+        stage=task.stage,
+        message=task.message
+    )
+
+
+@router.get("/", response_model=Dict[str, TaskStatusResponse])
+async def list_tasks_api():
+    """Возвращает список всех задач и их статусы."""
+    tasks = list_tasks()
+    return {t.id: TaskStatusResponse(
+        task_id=t.id,
+        status=t.status,
+        progress=t.progress,
+        stage=t.stage,
+        message=t.message
+    ) for t in tasks}
+
+
+@router.post("/{task_id}/cancel")
+async def cancel_task_api(task_id: str):
+    """Отменяет активную или стоящую в очереди задачу."""
+    from core.task_queue import cancel_task, get_task
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+    cancel_task(task_id)
+    return {"message": "Запрос на отмену отправлен."}
+
+
+@router.post("/{task_id}/pause")
+async def pause_task_api(task_id: str):
+    """Ставит выполняемую задачу на паузу."""
+    from core.task_queue import pause_task, get_task
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+    pause_task(task_id)
+    return {"message": "Задача поставлена на паузу."}
+
+
+@router.post("/{task_id}/resume")
+async def resume_task_api(task_id: str):
+    """Возобновляет задачу с паузы."""
+    from core.task_queue import resume_task, get_task
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+    resume_task(task_id)
+    return {"message": "Задача возобновлена."}
+
+
+@router.get("/metrics")
+async def get_global_metrics():
+    """Возвращает глобальные метрики, агрегируя данные по всем книгам."""
+    import config
+    from core.book_repository import BookRepository
+    from core.data_models import LLMMetric, AudioMetric, MetricCounter
+    from sqlmodel import select
+
+    output_dir = config.OUTPUT_DIR
+    if not output_dir.exists():
+        return {"chapter_summaries": {}, "counters": {}}
+
+    global_counters = {
+        "json_parse_errors": 0,
+        "name_collisions": 0,
+        "tts_hallucinations": 0,
+        "tts_retries": 0,
+        "api_retries": 0
+    }
+    
+    all_summaries = {}
+    
+    try:
+        all_projects = [d for d in output_dir.iterdir() if d.is_dir() and (d / "project.db").exists()]
+        for d in all_projects:
+            book_name = d.name
+            repo = BookRepository(book_id=book_name)
+            db_chapters = repo.get_all_chapters()
+            
+            with repo.get_session() as session:
+                llm_calls = session.exec(select(LLMMetric)).all()
+                audio_calls = session.exec(select(AudioMetric)).all()
+                counters = session.exec(select(MetricCounter)).all()
+                
+                for chap in db_chapters:
+                    chap_llm = [m for m in llm_calls if m.chapter_id == chap.id]
+                    chap_audio = [m for m in audio_calls if m.chapter_id == chap.id]
+                    chap_counters = [m for m in counters if m.chapter_id == chap.id]
+                    
+                    chap_errs = {c.counter_name: c.value for c in chap_counters}
+                    
+                    for c in chap_counters:
+                        name = c.counter_name
+                        if name in global_counters:
+                            global_counters[name] += c.value
+                    
+                    avg_rtf = sum(a.rtf for a in chap_audio) / len(chap_audio) if chap_audio else 0
+                    total_audio_sec = sum(a.audio_duration_ms for a in chap_audio) / 1000
+                    chap_tokens = sum(m.input_tokens + m.output_tokens for m in chap_llm)
+                    
+                    global_id = f"{book_name}:{chap.id}"
+                    all_summaries[global_id] = {
+                        "chapter_id": global_id,
+                        "llm_calls": len(chap_llm),
+                        "total_tokens": chap_tokens,
+                        "audio_units": len(chap_audio),
+                        "total_audio_duration_sec": round(total_audio_sec, 2),
+                        "avg_rtf": round(avg_rtf, 3),
+                        "avg_cer": round(sum(a.cer for a in chap_audio) / len(chap_audio), 4) if chap_audio else 0,
+                        "errors": chap_errs
+                    }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка агрегации глобальных метрик: {e}")
+                
+    return {
+        "counters": global_counters,
+        "chapter_summaries": all_summaries
+    }
+
+
+@router.get("/settings")
+async def get_settings():
+    """Возвращает текущие настройки системы (с маскированием апи ключей)."""
+    import config
+    
+    def mask_key(val: str, prefix_len: int = 4, suffix_len: int = 4) -> str:
+        if not val:
+            return ""
+        if prefix_len == 0 and suffix_len == 0:
+            return "••••••••"
+        if len(val) <= (prefix_len + suffix_len + 4):
+            return "••••••••"
+        return f"{val[:prefix_len]}...{val[-suffix_len:]}"
+
+    return {
+        "llm_provider": config.LLM_PROVIDER,
+        "fast_model": config.FAST_MODEL_NAME,
+        "powerful_model": config.POWERFUL_MODEL_NAME,
+        "analyzer_temp": config.ANALYZER_LLM_TEMPERATURE,
+        "generator_temp": config.GENERATOR_LLM_TEMPERATURE,
+        "chunk_size": config.SCENARIO_CHUNK_SIZE,
+        "cosyvoice_url": config.COSYVOICE_API_URL,
+        "elevenlabs_key": mask_key(config.ELEVENLABS_API_KEY, 4, 4),
+        "google_api_key": mask_key(config.GOOGLE_API_KEY, 4, 4),
+        "openrouter_api_key": mask_key(config.OPENROUTER_API_KEY, 4, 4)
+    }
+
+
+@router.post("/settings")
+async def update_settings(new_settings: dict):
+    """
+    Сохраняет новые настройки в системную базу данных.
+    """
+    from core.database import get_system_session
+    from core.system_models import SystemSetting
+
+    with get_system_session() as session:
+        for k, v in new_settings.items():
+            # Пропускаем маскированные значения для секретов
+            if k in ("elevenlabs_key", "google_api_key", "openrouter_api_key"):
+                if not v:
+                    # Если пустой, то сохраняем пустую строку
+                    pass
+                elif "•" in v or "..." in v:
+                    # Если пришла маска, пропускаем сохранение
+                    continue
+            
+            # Приведение типов для числовых параметров
+            if k in ("analyzer_temp", "generator_temp"):
+                try:
+                    v = float(v)
+                except (ValueError, TypeError):
+                    continue
+            elif k == "chunk_size":
+                try:
+                    v = int(v)
+                except (ValueError, TypeError):
+                    continue
+
+            setting = session.get(SystemSetting, k)
+            if not setting:
+                setting = SystemSetting(key=k)
+            setting.value = v
+            session.add(setting)
+        session.commit()
+        
+    return {"message": "Настройки успешно сохранены."}
