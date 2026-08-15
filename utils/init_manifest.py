@@ -1,8 +1,8 @@
 import logging
 from typing import Optional, Dict, Any
 
-from core.project_context import ProjectContext
-from core.data_models import BookManifest, ManifestChapterEntry, ManifestMeta
+from core.book_repository import BookRepository
+from core import path_manager
 from utils import file_utils
 from utils.setup_logging import setup_logging
 
@@ -14,90 +14,72 @@ def init_manifest(
         metadata: Optional[Dict[str, Any]] = None
 ):
     """
-    Создает manifest.json, представляешь?
+    Инициализирует базу данных проекта (project.db) вместо манифеста.
     """
     if metadata is None:
         metadata = {}
 
-    logger.info(f"ЗАПУСК ИНИЦИАЛИЗАЦИИ МАНИФЕСТА: '{book_name}'")
+    logger.info(f"ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ПРОЕКТА: '{book_name}'")
 
-    context = ProjectContext(book_name=book_name)
-    book_src_dir = context.book_dir
-    manifest_path = context.manifest_file
+    repo = BookRepository(book_id=book_name)
+    book_src_dir = path_manager.get_book_dir(book_name)
 
     if not book_src_dir.exists():
         logger.error(f"ПАПКА НЕ НАЙДЕНА: {book_src_dir}")
         return
 
-    context.book_output_dir.mkdir(parents=True, exist_ok=True)
+    # Создаем папку проекта и инициализируем БД
+    path_manager.ensure_book_dirs(book_name)
+    
+    from core.data_models import Book, Chapter
+    from sqlmodel import Session, select
 
-    chapter_paths = file_utils.get_all_chapters(book_src_dir)
-    structure_entries = []
-
-    for idx, path in enumerate(chapter_paths, 1):
-        try:
-            vol, chap = file_utils.parse_vol_chap_from_path(path)
-
-            chapter_ctx = ProjectContext(book_name, vol, chap)
-            status = "draft"
-            if chapter_ctx.chapter_audio_dir.exists() and any(chapter_ctx.chapter_audio_dir.iterdir()):
-                status = "audio_ready"
-
-            display_title = f"Глава {chap}"
-            if vol > 1: display_title += f" (Том {vol})"
-
-            entry = ManifestChapterEntry(
-                order=idx,
-                title=display_title,
-                vol=vol,
-                chap=chap,
-                status=status
+    with repo.get_session() as session:
+        # 1. Создаем или обновляем Книгу
+        book = session.get(Book, book_name)
+        if not book:
+            book = Book(
+                id=book_name,
+                title=metadata.get("title", book_name),
+                author=metadata.get("author", "Unknown Author"),
+                description=metadata.get("description", ""),
+                status=metadata.get("status", "ongoing"),
+                tags=metadata.get("tags", []),
+                language=metadata.get("language", "ru"),
+                cover_image_path=metadata.get("cover_image")
             )
-            structure_entries.append(entry)
+            session.add(book)
+        
+        # 2. Сканируем главы и добавляем в БД
+        chapter_paths = file_utils.get_all_chapters(book_src_dir)
+        
+        for idx, path in enumerate(chapter_paths, 1):
+            try:
+                vol, chap_num = file_utils.parse_vol_chap_from_path(path)
+                local_id = f"vol_{vol}_chap_{chap_num}"
+                
+                existing_chap = session.get(Chapter, local_id)
+                if not existing_chap:
+                    # Читаем текст главы для базы
+                    raw_text = path.read_text("utf-8")
+                    
+                    new_chap = Chapter(
+                        id=local_id,
+                        book_id=book_name,
+                        volume_num=vol,
+                        chapter_num=chap_num,
+                        title=f"Глава {chap_num}" + (f" (Том {vol})" if vol > 1 else ""),
+                        status="draft",
+                        order_index=idx,
+                        raw_text=raw_text
+                    )
+                    session.add(new_chap)
+            except Exception as e:
+                logger.error(f"Ошибка при импорте главы {path}: {e}")
 
-        except Exception as e:
-            logger.error(f"Ошибка с файлом {path}: {e}")
+        session.commit()
 
-    old_manifest = None
-    if manifest_path.exists():
-        logger.info("Обнаружен существующий manifest.json")
-        try:
-            old_manifest = BookManifest.load(manifest_path)
-            logger.info("Старый манифест валиден. Данные будут объединены.")
-        except Exception:
-            logger.warning("СТАРЫЙ МАНИФЕСТ НЕСОВМЕСТИМ. ОН БУДЕТ ПЕРЕЗАПИСАН.")
-            old_manifest = None
-
-    # FIXME: Тут incorrect call, я не понимаю почему :cry:
-    old_meta = old_manifest.meta if old_manifest else ManifestMeta()
-
-    final_meta = ManifestMeta(
-        title=metadata.get("title") or old_meta.title,
-        author=metadata.get("author") or old_meta.author,
-        description=metadata.get("description") or old_meta.description,
-        tags=metadata.get("tags") or old_meta.tags,
-        source_url=metadata.get("source_url") or old_meta.source_url,
-        status=metadata.get("status") or old_meta.status,
-        version=old_meta.version,
-        total_duration_ms=old_meta.total_duration_ms,
-        cover_image=metadata.get("cover_image") or old_meta.cover_image,
-        language=metadata.get("language") or old_meta.language or "ru"
-    )
-
-    new_manifest = BookManifest(
-        project_id=book_name,
-        meta=final_meta,
-        structure=structure_entries
-    )
-
-    if old_manifest and old_manifest.config:
-        new_manifest.config = old_manifest.config
-
-    new_manifest.config.last_run_log = f"Found {len(structure_entries)} chapters"
-
-    new_manifest.save(manifest_path)
-
-    logger.info(f"МАНИФЕСТ ОБНОВЛЕН: {final_meta.title} ({len(structure_entries)} глав)")
+    logger.info(f"ПРОЕКТ ИНИЦИАЛИЗИРОВАН В БД: {book_name} ({len(chapter_paths)} глав)")
 
 
 if __name__ == "__main__":

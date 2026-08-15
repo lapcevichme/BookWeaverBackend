@@ -1,48 +1,54 @@
 import logging
+import subprocess
+import json
+import os
+import tempfile
 from pathlib import Path
 from typing import List, Dict, Tuple
-from pydub import AudioSegment
 from core.data_models import Scenario
 
 logger = logging.getLogger(__name__)
 
+def get_audio_duration_ms(file_path: Path) -> int:
+    """Получает длительность аудиофайла в миллисекундах через ffprobe."""
+    try:
+        cmd = [
+            'ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+            '-of', 'default=noprint_wrappers=1:nokey=1', str(file_path)
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        duration_sec = float(result.stdout.strip())
+        return int(duration_sec * 1000)
+    except Exception as e:
+        logger.error(f"Ошибка при получении длительности {file_path.name}: {e}")
+        return 0
 
 def merge_chapter_audio(
         scenario: Scenario,
         audio_dir: Path,
-        output_file_path: Path,
-        subtitles_map: Dict = None
+        output_file_path: Path
 ) -> Tuple[int, List[dict]]:
     """
-    Склеивает аудиофайлы главы в один большой файл и создает карту синхронизации.
-    Корректно обрабатывает новые типы данных, включая 'image' (без поиска аудио).
+    Склеивает аудиофайлы главы через ffmpeg (стриминг, экономно по памяти).
+    Создает карту синхронизации на основе метаданных файлов и данных из БД.
     """
-
-    if subtitles_map is None:
-        subtitles_map = {}
-
-    combined_audio = AudioSegment.empty()
     sync_map = []
     current_offset_ms = 0
-
-    gap_ms = 0
-    silence = AudioSegment.silent(duration=gap_ms)
-
-    logger.info(f"Начинаем склейку аудио для главы. Выходной файл: {output_file_path.name}")
-
+    audio_files_to_concat = []
+    
     missing_files_count = 0
+    logger.info(f"Начинаем оптимизированную склейку аудио для {output_file_path.name}")
 
-    for i, entry in enumerate(scenario.entries):
+    for entry in scenario.entries:
         eid = str(entry.id)
-
         instruct = getattr(entry, 'instruct_prompt', 'neutral')
 
         sync_item = {
             "id": eid,
             "text": entry.text,
-            "speaker": entry.speaker,
+            "speaker": entry.speaker_name if hasattr(entry, 'speaker_name') else getattr(entry, 'speaker', 'Unknown'),
             "type": entry.type,
-            "emotion": instruct, # В мапе синхронизации оставляем ключ emotion для совместимости с фронтендом. TODO: Придумать что с фронтом делать
+            "emotion": instruct,
             "ambient": entry.ambient if entry.ambient else "none",
         }
 
@@ -57,21 +63,10 @@ def merge_chapter_audio(
         file_path = audio_dir / audio_filename
 
         segment_duration = 0
-
         if file_path.exists():
-            try:
-                segment = AudioSegment.from_file(str(file_path))
-                segment_duration = len(segment)
-                combined_audio += segment
-
-                # Тишина после сегмента, если это не последний элемент и не картинка
-                if gap_ms > 0 and i < len(scenario.entries) - 1:
-                    next_entry = scenario.entries[i + 1]
-                    if next_entry.type != "image":
-                        combined_audio += silence
-
-            except Exception as e:
-                logger.error(f"Ошибка обработки аудиофайла {file_path.name}: {e}")
+            segment_duration = get_audio_duration_ms(file_path)
+            if segment_duration > 0:
+                audio_files_to_concat.append(file_path)
         else:
             missing_files_count += 1
             if missing_files_count <= 5:
@@ -83,33 +78,56 @@ def merge_chapter_audio(
         sync_item["start_ms"] = entry_start
         sync_item["end_ms"] = entry_end
 
-        # Alignment
-        sub_info = subtitles_map.get(eid)
-        if sub_info and 'words' in sub_info:
-            adjusted_words = []
-            for w in sub_info['words']:
-                adjusted_words.append({
+        # Alignment (субтитры по словам) - читаем из БД
+        if hasattr(entry, 'audio_subtitles') and entry.audio_subtitles and 'words' in entry.audio_subtitles:
+            relative_words = entry.audio_subtitles['words']
+            # Конвертируем относительные тайминги в глобальные
+            global_words = []
+            for w in relative_words:
+                global_words.append({
                     "word": w["word"],
-                    "start": w["start"],
-                    "end": w["end"]
+                    "start": w["start"] + entry_start,
+                    "end": w["end"] + entry_start
                 })
-            sync_item["words"] = adjusted_words
+            sync_item["words"] = global_words
 
         sync_map.append(sync_item)
+        current_offset_ms = entry_end
 
-        if segment_duration > 0:
-            current_offset_ms = entry_end + gap_ms
+    if not audio_files_to_concat:
+        logger.warning("Нет аудиофайлов для склейки.")
+        return 0, sync_map
 
-    if missing_files_count > 0:
-        logger.warning(f"Всего пропущено аудиофайлов: {missing_files_count}")
+    # Создаем временный файл для ffmpeg concat
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        for p in audio_files_to_concat:
+            # Пути в concat файле должны быть экранированы
+            safe_path = str(p.absolute()).replace("'", "'\\''")
+            f.write(f"file '{safe_path}'\n")
+        concat_list_path = f.name
 
-    output_file_path.parent.mkdir(parents=True, exist_ok=True)
-    logger.info(f"Экспорт общего аудиофайла: {output_file_path} (Длительность: {len(combined_audio)} мс)")
+    try:
+        output_file_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Запускаем ffmpeg
+        # -f concat: используем демуксер конкатенации
+        # -safe 0: разрешаем любые пути
+        # -y: перезаписывать выходной файл
+        cmd = [
+            'ffmpeg', '-y', '-f', 'concat', '-safe', '0', 
+            '-i', concat_list_path, 
+            '-acodec', 'libmp3lame', '-b:a', '192k', 
+            str(output_file_path)
+        ]
+        
+        subprocess.run(cmd, check=True, capture_output=True)
+        logger.info(f"✅ Успешно склеено в {output_file_path.name}. Итого: {current_offset_ms} мс")
+        
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ Ошибка ffmpeg: {e.stderr.decode()}")
+        return 0, sync_map
+    finally:
+        if os.path.exists(concat_list_path):
+            os.remove(concat_list_path)
 
-    if len(combined_audio) > 0:
-        file_handle = combined_audio.export(str(output_file_path), format="mp3", bitrate="192k")
-        file_handle.close()
-    else:
-        logger.warning("Итоговый аудиофайл пуст, экспорт не выполнен.")
-
-    return len(combined_audio), sync_map
+    return current_offset_ms, sync_map

@@ -6,7 +6,9 @@ import uuid
 from ebooklib import epub
 
 import config
-from core.project_context import ProjectContext
+from core.book_repository import BookRepository
+from core import path_manager
+from core.data_models import Scenario
 from utils.setup_logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -19,7 +21,7 @@ class EpubExporter:
 
     def __init__(self, book_name: str):
         self.book_name = book_name
-        self.context = ProjectContext(book_name=self.book_name)
+        self.repo = BookRepository(book_name)
         self.export_dir = config.EXPORT_DIR
         self.export_dir.mkdir(parents=True, exist_ok=True)
         self.epub_path = self.export_dir / f"{self.book_name}.epub"
@@ -54,14 +56,10 @@ class EpubExporter:
 
     def _create_glossary(self, book: epub.EpubBook) -> Optional[epub.EpubHtml]:
         """
-        Генерирует главу с глоссарием персонажей на основе CharacterArchive.
+        Генерирует главу с глоссарием персонажей на основе данных из БД.
         """
-        archive_path = self.context.character_archive_file
-        if not archive_path.exists():
-            return None
-
         try:
-            archive = self.context.load_character_archive()
+            archive = self.repo.get_character_archive()
             if not archive.characters:
                 return None
         except Exception as e:
@@ -106,7 +104,7 @@ class EpubExporter:
         logger.info(f"Начало сборки EPUB для: '{self.book_name}'")
 
         try:
-            manifest = self.context.load_manifest()
+            manifest = self.repo.load_manifest()
 
             # Создаем книгу и настраиваем мету
             book = epub.EpubBook()
@@ -117,8 +115,9 @@ class EpubExporter:
                 book.add_author(manifest.meta.author)
 
             # Обложка
-            if self.context.cover_file.exists():
-                book.set_cover("cover.jpg", self.context.cover_file.read_bytes())
+            cover_path = path_manager.get_cover_path(self.book_name)
+            if cover_path.exists():
+                book.set_cover("cover.jpg", cover_path.read_bytes())
 
             # CSS
             style = """
@@ -136,18 +135,23 @@ class EpubExporter:
 
             # Сборка глав
             epub_chapters = []
-            chapters_info = self.context.get_ordered_chapters()
-            images_dir = self.context.book_dir / "images"
+            db_chapters = self.repo.get_all_chapters()
+            book_input_dir = path_manager.get_book_dir(self.book_name)
+            images_dir = book_input_dir / "images"
 
-            for vol, chap in chapters_info:
-                chapter_ctx = ProjectContext(self.book_name, vol, chap)
-                scenario = chapter_ctx.load_scenario()
+            for db_chap in db_chapters:
+                vol = db_chap.volume_num
+                chap = db_chap.chapter_num
+                chapter_id = db_chap.id
+                
+                entries = self.repo.get_scenario_entries(chapter_id)
+                scenario = Scenario(entries=entries) if entries else None
 
                 if not scenario:
-                    logger.warning(f"Сценарий для {chapter_ctx.chapter_id} не найден. Пропуск.")
+                    logger.warning(f"Сценарий для {chapter_id} не найден. Пропуск.")
                     continue
 
-                chapter_title = f"Том {vol}. Глава {chap}"
+                chapter_title = db_chap.title or f"Том {vol}. Глава {chap}"
                 for struct_item in manifest.structure:
                     if struct_item.vol == vol and struct_item.chap == chap:
                         chapter_title = struct_item.title

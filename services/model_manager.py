@@ -41,9 +41,9 @@ class ModelManager:
 
         api_key = None
         if provider == 'openrouter':
-            api_key = os.getenv('OPENROUTER_API_KEY')
+            api_key = getattr(config, 'OPENROUTER_API_KEY', None)
         elif provider == 'google':
-            api_key = os.getenv('GOOGLE_API_KEY')
+            api_key = getattr(config, 'GOOGLE_API_KEY', None)
 
         if service_type == 'character_analyzer':
             service_key = 'llm_character_analyzer'

@@ -1,18 +1,20 @@
 import sys
 import shutil
+import logging
 from pathlib import Path
+import re
 
 project_root = Path(__file__).resolve().parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
-from core.project_context import ProjectContext
+from core import path_manager
 from utils.book_parsers import EpubParser, TxtParser, ZipParser
 from utils.init_manifest import init_manifest
 from utils.text_utils import cleanup_filename
 from utils.setup_logging import setup_logging
-import re
 
+logger = logging.getLogger(__name__)
 
 class BookConverter:
     def __init__(self, input_file: Path):
@@ -21,9 +23,8 @@ class BookConverter:
 
         self.input_file = input_file
         self.book_name = cleanup_filename(input_file.stem)
-        self.context = ProjectContext(book_name=self.book_name)
-        self.project_input_dir = self.context.book_dir
-        self.project_output_dir = self.context.book_output_dir
+        self.project_input_dir = path_manager.get_book_dir(self.book_name)
+        self.project_output_dir = path_manager.get_book_output_dir(self.book_name)
 
     def run(self):
         print(f"Запуск конвертации: '{self.book_name}'")
@@ -64,7 +65,7 @@ class BookConverter:
         print(f"✅ Тексты сохранены.")
 
         if images_dict:
-            images_dir = self.context.book_dir / "images"
+            images_dir = path_manager.get_book_dir(self.book_name) / "images"
             images_dir.mkdir(exist_ok=True)
             for img_name, img_bytes in images_dict.items():
                 (images_dir / img_name).write_bytes(img_bytes)
@@ -72,9 +73,10 @@ class BookConverter:
 
         self.project_output_dir.mkdir(parents=True, exist_ok=True)
         if cover_bytes:
-            self.context.cover_file.write_bytes(cover_bytes)
-            meta['cover_image'] = self.context.cover_file.name
-            print(f"   -> Обложка сохранена ({self.context.cover_file.name}).")
+            cover_path = path_manager.get_cover_path(self.book_name)
+            cover_path.write_bytes(cover_bytes)
+            meta['cover_image'] = cover_path.name
+            print(f"   -> Обложка сохранена ({cover_path.name}).")
 
         init_manifest(
             book_name=self.book_name,
@@ -85,7 +87,7 @@ class BookConverter:
 
     def _save_chapters(self, volumes: dict):
         for vol_num, chapters in volumes.items():
-            vol_dir = self.context.book_dir / f"vol_{vol_num}"
+            vol_dir = path_manager.get_book_dir(self.book_name) / f"vol_{vol_num}"
             vol_dir.mkdir(exist_ok=True)
 
             for chap_num, text in chapters.items():

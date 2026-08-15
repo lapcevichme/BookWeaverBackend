@@ -7,7 +7,9 @@ from pathlib import Path
 from typing import Set
 
 import config
-from core.project_context import ProjectContext
+from core.book_repository import BookRepository
+from core import path_manager
+from core.data_models import Scenario
 from utils.setup_logging import setup_logging
 from utils.audio_merger import merge_chapter_audio
 
@@ -22,7 +24,7 @@ class BookExporter:
 
     def __init__(self, book_name: str):
         self.book_name = book_name
-        self.context = ProjectContext(book_name=self.book_name)
+        self.repo = BookRepository(book_id=self.book_name)
         self.export_dir = config.EXPORT_DIR
         self.archive_path = self.export_dir / f"{self.book_name}.bw"
         self.temp_build_dir = config.TEMP_DIR / f"temp_build_{self.book_name}_{uuid.uuid4().hex[:8]}"
@@ -42,10 +44,16 @@ class BookExporter:
 
     def _copy_static_assets(self, used_ambients: Set[str]):
         """Копирует статичные ассеты (обложка, эмбиент, иллюстрации)."""
-        if self.context.cover_file.exists():
-            shutil.copy2(self.context.cover_file, self.temp_build_dir / self.context.cover_file.name)
+        book = self.repo.get_book()
+        if book and book.cover_image_path:
+            cover_path = Path(book.cover_image_path)
+            if not cover_path.is_absolute():
+                cover_path = path_manager.get_book_output_dir(self.book_name) / cover_path
+            
+            if cover_path.exists():
+                shutil.copy2(cover_path, self.temp_build_dir / cover_path.name)
 
-        source_images_dir = self.context.images_dir
+        source_images_dir = path_manager.get_book_output_dir(self.book_name) / "images"
         if source_images_dir.exists() and source_images_dir.is_dir():
             dest_images_dir = self.temp_build_dir / "content" / "images"
             shutil.copytree(source_images_dir, dest_images_dir, dirs_exist_ok=True)
@@ -79,8 +87,8 @@ class BookExporter:
         try:
             logger.info("Экспорт метаданных из БД...")
 
-            manifest = self.context.load_manifest()
-            characters = self.context.load_character_archive()
+            manifest = self.repo.load_manifest()
+            characters = self.repo.get_character_archive()
 
             # Сохраняем персонажей в архив
             self._write_json(characters.model_dump(mode='json'), "characters.json")
@@ -92,18 +100,19 @@ class BookExporter:
             content_dir = self.temp_build_dir / "content"
             content_dir.mkdir()
 
-            chapters = self.context.get_ordered_chapters()
-            logger.info(f"Обработка {len(chapters)} глав...")
+            db_chapters = self.repo.get_all_chapters()
+            logger.info(f"Обработка {len(db_chapters)} глав...")
 
-            for vol, chap in chapters:
-                chapter_ctx = ProjectContext(self.book_name, vol, chap)
-                cid = chapter_ctx.chapter_id
+            for db_chap in db_chapters:
+                cid = db_chap.id
 
                 logger.info(f" -> Глава: {cid}")
 
                 chapter_out_dir = content_dir / cid
 
-                scenario = chapter_ctx.load_scenario()
+                entries = self.repo.get_scenario_entries(cid)
+                scenario = Scenario(entries=entries) if entries else None
+
                 if not scenario:
                     logger.warning(f"Сценарий для {cid} не найден. Пропуск.")
                     continue
@@ -113,21 +122,10 @@ class BookExporter:
                 for entry in scenario.entries:
                     if entry.ambient and entry.ambient != "none":
                         used_ambients.add(entry.ambient)
-                    # SFX пока игнорируем
-
-                subtitles_map = {}
-                if chapter_ctx.subtitles_file.exists():
-                    try:
-                        sub_json = json.loads(chapter_ctx.subtitles_file.read_text("utf-8"))
-                        if isinstance(sub_json, list):
-                            subtitles_map = {item.get("audio_file").replace(".wav", ""): item for item in sub_json if
-                                             item.get("audio_file")}
-                    except Exception:
-                        pass
 
                 # Склейка
                 full_audio_path = chapter_out_dir / "audio.mp3"
-                source_audio_dir = chapter_ctx.get_audio_output_dir()
+                source_audio_dir = path_manager.get_chapter_audio_dir(self.book_name, cid)
 
                 duration_ms = 0
                 sync_map = []
@@ -136,8 +134,7 @@ class BookExporter:
                     duration_ms, sync_map = merge_chapter_audio(
                         scenario=scenario,
                         audio_dir=source_audio_dir,
-                        output_file_path=full_audio_path,
-                        subtitles_map=subtitles_map
+                        output_file_path=full_audio_path
                     )
                 else:
                     logger.warning(f"Аудиофайлы для {cid} не найдены. Глава будет без звука.")
@@ -145,7 +142,7 @@ class BookExporter:
                 total_book_duration += duration_ms
 
                 try:
-                    raw_chapter_text = chapter_ctx.get_chapter_text()
+                    raw_chapter_text = self.repo.get_chapter_text(cid)
                 except Exception:
                     raw_chapter_text = ""
 
@@ -165,8 +162,9 @@ class BookExporter:
 
             manifest.meta.total_duration_ms = total_book_duration
 
-            if self.context.cover_file.exists():
-                manifest.meta.cover_image = self.context.cover_file.name
+            book = self.repo.get_book()
+            if book and book.cover_image_path:
+                manifest.meta.cover_image = Path(book.cover_image_path).name
 
             for ch in manifest.structure:
                 if ch.id in successful_chapters:

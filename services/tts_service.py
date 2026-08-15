@@ -62,19 +62,42 @@ class TTSService(BaseTorchService):
             logger.debug("VRAM: Whisper уже выгружен или не был загружен.")
 
     def _get_prompt_text(self, speaker_wav_path: Path) -> str:
-        """Получает текст из референсного аудио (кэширует результат)."""
+        """Получает текст из референсного аудио (кэширует результат на диск)."""
         path_str = str(speaker_wav_path)
+        
+        # 1. Проверяем в оперативной памяти
         if path_str in self._reference_transcription_cache:
             return self._reference_transcription_cache[path_str]
 
+        # Путь к файлу транскрипции рядом с аудио
+        txt_path = speaker_wav_path.with_suffix(speaker_wav_path.suffix + ".txt")
+
+        # 2. Проверяем файл на диске
+        if txt_path.exists() and txt_path.is_file():
+            try:
+                text = txt_path.read_text(encoding="utf-8").strip()
+                if text:
+                    self._reference_transcription_cache[path_str] = text
+                    return text
+            except Exception as e:
+                logger.error(f"Ошибка чтения файла транскрипции {txt_path}: {e}")
+
+        # 3. Если нет, транскрибируем Whisper'ом
         model = self.whisper_model
         if not model:
             return " "
 
         try:
-            logger.info(f"Транскрипция референса: {speaker_wav_path.name}")
+            logger.info(f"Транскрипция референса через Whisper: {speaker_wav_path.name}")
             result = model.transcribe(path_str)
             text = result.text.strip()
+            
+            # Сохраняем на диск и кэшируем в памяти
+            try:
+                txt_path.write_text(text, encoding="utf-8")
+            except Exception as e:
+                logger.error(f"Не удалось записать файл транскрипции {txt_path}: {e}")
+                
             self._reference_transcription_cache[path_str] = text
             return text
         except Exception as e:

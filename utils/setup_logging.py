@@ -27,7 +27,19 @@ def setup_logging():
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
     stdout_handler.setFormatter(console_formatter)
+    
+    # Фильтр для удаления спама от эндпоинта /tasks/
+    class EndpointFilter(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:
+            # У uvicorn access логов сообщение содержит путь запроса
+            return "GET /api/v1/tasks/" not in record.getMessage()
+
+    stdout_handler.addFilter(EndpointFilter())
     root_logger.addHandler(stdout_handler)
+
+    # ПОЛНОЕ ГАШЕНИЕ СПАМА
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
 
     app_file_handler = TimedRotatingFileHandler(
         config.LOG_APP_FILE,

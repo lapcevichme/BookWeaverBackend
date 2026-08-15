@@ -104,6 +104,7 @@ class LLMService:
                 result = self._process_response_text(response_text, pydantic_model)
                 if not result:
                     status = "json_error"
+                    logger.error(f"❌ JSON/Validation Error for {prompt_type}. Raw response: {response_text[:1000]}...")
                 else:
                     return result
         except Exception as e:
@@ -177,5 +178,9 @@ class LLMService:
         if not match: return None
         try:
             return pydantic_model.model_validate_json(match.group(1).strip())
-        except ValidationError:
+        except ValidationError as ve:
+            logger.error(f"❌ Pydantic Validation Error for {pydantic_model.__name__}: {ve}")
+            return None
+        except Exception as e:
+            logger.error(f"❌ JSON Parsing Error: {e}")
             return None
