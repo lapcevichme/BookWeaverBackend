@@ -2,15 +2,17 @@ import json
 import logging
 import re
 import socket
-from typing import List
+from typing import List, Optional
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 import config
 from api import state
 from api.security import verify_token
-from core.data_models import BookManifest, CharacterArchive, ChapterSummaryArchive, Scenario
-from core.project_context import ProjectContext
-from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
+from core.book_repository import BookRepository
+from core import path_manager
 from utils.audio_merger import merge_chapter_audio
 
 from api.mobile.mobile_api_models import (
@@ -53,7 +55,6 @@ def parse_chapter_id(chapter_id: str) -> (int, int):
     return int(match.group(1)), int(match.group(2))
 
 
-# abcolute vibecode
 @api_router.get("/show-qr", response_class=HTMLResponse)
 async def show_qr_code_page():
     html_content = """
@@ -91,7 +92,7 @@ async def ping():
     return PingResponseDto(status="ok", server_name="BookWeaver Server")
 
 
-# Книги и Структура
+# --- Книги и Структура ---
 
 @api_router.get("/books", response_model=List[BookManifestDto], dependencies=[Depends(verify_token)])
 async def get_all_books():
@@ -101,23 +102,24 @@ async def get_all_books():
         return []
 
     for book_dir in books_dir.iterdir():
-        if book_dir.is_dir():
+        if book_dir.is_dir() and (book_dir / "project.db").exists():
             try:
-                context = ProjectContext(book_name=book_dir.name)
-                if not context.manifest_file.exists():
+                repo = BookRepository(book_id=book_dir.name)
+                book = repo.get_book()
+                if not book:
                     continue
 
-                manifest_data = BookManifest.load(context.manifest_file)
-                character_voices_dto = {str(uuid): voice for uuid, voice in manifest_data.character_voices.items()}
+                manifest = repo.load_manifest()
+                character_voices_dto = {str(uuid): voice for uuid, voice in manifest.config.character_voices.items()}
 
                 books_list.append(BookManifestDto(
-                    book_name=manifest_data.book_name,
-                    author=manifest_data.author,
+                    book_name=book.id,
+                    author=book.author or "Неизвестный автор",
                     character_voices=character_voices_dto,
-                    default_narrator_voice=manifest_data.default_narrator_voice
+                    default_narrator_voice=manifest.config.default_narrator_voice
                 ))
             except Exception as e:
-                logger.warning(f"Не удалось загрузить манифест для '{book_dir.name}': {e}")
+                logger.warning(f"Не удалось загрузить данные книги '{book_dir.name}': {e}")
                 continue
 
     return books_list
@@ -127,40 +129,30 @@ async def get_all_books():
                 dependencies=[Depends(verify_token)])
 async def get_book_structure(bookId: str):
     try:
-        context = ProjectContext(book_name=bookId)
-        if not context.manifest_file.exists():
-            raise HTTPException(status_code=404, detail="Книга не найдена (нет манифеста).")
-
-        manifest_data = BookManifest.load(context.manifest_file)
+        repo = BookRepository(book_id=bookId)
+        book = repo.get_book()
+        if not book:
+            raise HTTPException(status_code=404, detail="Книга не найдена в БД.")
 
         manifest_structure = BookManifestStructureDto(
-            book_name=manifest_data.book_name,
-            title=manifest_data.book_name.replace("_", " ").title(),
-            author=manifest_data.author,
+            book_name=book.id,
+            title=book.title or book.id.replace("_", " ").title(),
+            author=book.author or "Неизвестный автор",
             version=1,
             poster_url=f"/static/books/{bookId}/cover.jpg"
         )
 
         chapters_dto = []
-        ordered_chapters = context.get_ordered_chapters()
-        for vol_num, chap_num in ordered_chapters:
-            chapter_id = f"vol_{vol_num}_chap_{chap_num}"
-
-            # Проверка наличия аудио
-            chapter_audio_dir = context.book_output_dir / chapter_id / "audio"
-            has_audio = False
-            if chapter_audio_dir.exists():
-                try:
-                    if any(chapter_audio_dir.iterdir()):
-                        has_audio = True
-                except OSError:
-                    pass
+        db_chapters = repo.get_all_chapters()
+        for chap in db_chapters:
+            audio_dir = path_manager.get_chapter_audio_dir(bookId, chap.id)
+            has_audio = audio_dir.exists() and any(audio_dir.iterdir())
 
             chapters_dto.append(ChapterStubDto(
-                id=chapter_id,
-                title=f"Том {vol_num}, Глава {chap_num}",
+                id=chap.id,
+                title=chap.title or f"Том {chap.volume_num}, Глава {chap.chapter_num}",
                 version=1,
-                volume_number=vol_num,
+                volume_number=chap.volume_num,
                 has_audio=has_audio
             ))
 
@@ -180,45 +172,38 @@ async def get_book_structure(bookId: str):
                 dependencies=[Depends(verify_token)])
 async def get_original_chapter_text(bookId: str, chapterId: str):
     """
-    Возвращает оригинальный текст главы (Raw Text).
+    Возвращает оригинальный текст главы (Raw Text) из БД или файла.
     """
     try:
-        vol, chap = parse_chapter_id(chapterId)
-        context = ProjectContext(book_name=bookId, volume_num=vol, chapter_num=chap)
-
-        if not hasattr(context, 'chapter_file') or not context.chapter_file.exists():
-            raise HTTPException(status_code=404, detail="Original text file not found")
-
-        content = context.chapter_file.read_text(encoding="utf-8")
+        repo = BookRepository(book_id=bookId)
+        content = repo.get_chapter_text(chapterId)
         return PlainTextResponse(content=content, media_type="text/plain")
-
-    except HTTPException as e:
-        raise e
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         logger.error(f"Error serving original text for {bookId}/{chapterId}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Персонажи
+# --- Персонажи ---
 
 @api_router.get("/books/{bookId}/characters", response_model=List[CharacterListEntryDto],
                 dependencies=[Depends(verify_token)])
 async def get_book_characters(bookId: str):
     try:
-        context = ProjectContext(book_name=bookId)
-        if not context.character_archive_file.exists():
-            return []
-
-        char_archive = CharacterArchive.load(context.character_archive_file)
+        repo = BookRepository(book_id=bookId)
+        db_chars = repo.get_characters()
         result_list = []
 
-        for char in char_archive.characters:
+        for char in db_chars:
             avatar_url = f"/static/books/{bookId}/chars/{char.id}.jpg"
             result_list.append(CharacterListEntryDto(
                 id=str(char.id),
                 name=char.name,
                 avatar_url=avatar_url,
-                short_role=None
+                short_role=char.role_tier
             ))
 
         return result_list
@@ -231,12 +216,9 @@ async def get_book_characters(bookId: str):
                 dependencies=[Depends(verify_token)])
 async def get_character_details(bookId: str, characterId: str):
     try:
-        context = ProjectContext(book_name=bookId)
-        if not context.character_archive_file.exists():
-            raise HTTPException(status_code=404, detail="Архив персонажей не найден.")
-
-        char_archive = CharacterArchive.load(context.character_archive_file)
-        target_char = next((c for c in char_archive.characters if str(c.id) == characterId), None)
+        repo = BookRepository(book_id=bookId)
+        db_chars = repo.get_characters()
+        target_char = next((c for c in db_chars if str(c.id) == characterId), None)
 
         if not target_char:
             raise HTTPException(status_code=404, detail="Персонаж не найден.")
@@ -257,32 +239,22 @@ async def get_character_details(bookId: str, characterId: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Детали главы
+# --- Детали главы ---
 
 @api_router.get("/books/{bookId}/chapters/{chapterId}/info", response_model=ChapterInfoDto,
                 dependencies=[Depends(verify_token)])
 async def get_chapter_info(bookId: str, chapterId: str):
     try:
-        context = ProjectContext(book_name=bookId)
-        if not context.summary_archive_file.exists():
-            vol, chap = parse_chapter_id(chapterId)
-            return ChapterInfoDto(
-                chapter_id=chapterId,
-                title=f"Том {vol}, Глава {chap}",
-                teaser="Описание отсутствует.",
-                synopsis="Синопсис не сгенерирован."
-            )
-
-        summary_archive = ChapterSummaryArchive.load(context.summary_archive_file)
-        summary = summary_archive.summaries.get(chapterId)
         vol, chap = parse_chapter_id(chapterId)
+        repo = BookRepository(book_id=bookId)
+        db_chap = repo.get_chapter(chapterId)
 
-        if summary:
+        if db_chap and db_chap.summary:
             return ChapterInfoDto(
                 chapter_id=chapterId,
-                title=f"Том {vol}, Глава {chap}",
-                teaser=summary.teaser,
-                synopsis=summary.synopsis
+                title=db_chap.title or f"Том {vol}, Глава {chap}",
+                teaser=db_chap.summary.teaser,
+                synopsis=db_chap.summary.synopsis
             )
         else:
             return ChapterInfoDto(
@@ -296,31 +268,26 @@ async def get_chapter_info(bookId: str, chapterId: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Playback Data
+# --- Playback Data ---
 
 @api_router.get("/books/{bookId}/{chapterId}/playbackData", response_model=PlaybackDataResponseDto,
                 dependencies=[Depends(verify_token)])
 async def get_chapter_playback_data(bookId: str, chapterId: str, force_rebuild: bool = False):
     """
-    Возвращает данные для воспроизведения: единый файл + карта синхронизации.
-    Если аудио нет, возвращает sync_map с пустым audio_url.
+    Возвращает данные для воспроизведения из БД книги: единый файл + карта синхронизации.
     """
     try:
-        vol, chap = parse_chapter_id(chapterId)
-        context = ProjectContext(book_name=bookId, volume_num=vol, chapter_num=chap)
+        repo = BookRepository(book_id=bookId)
+        chapter_audio_dir = path_manager.get_chapter_audio_dir(bookId, chapterId)
 
-        # Файлы кеша для склеенной версии
-        full_audio_path = context.chapter_audio_dir / "full_chapter.mp3"
-        sync_map_path = context.chapter_audio_dir / "full_chapter_map.json"
+        full_audio_path = chapter_audio_dir / "full_chapter.mp3"
+        sync_map_path = chapter_audio_dir / "full_chapter_map.json"
 
-        # Пытаемся отдать из кеша (если он есть и валиден)
         if full_audio_path.exists() and sync_map_path.exists() and not force_rebuild:
             logger.info(f"Serving cached playback data for {chapterId}")
             try:
                 sync_data = json.loads(sync_map_path.read_text("utf-8"))
-                duration_ms = 0
-                if sync_data:
-                    duration_ms = sync_data[-1]["end_ms"]
+                duration_ms = sync_data[-1]["end_ms"] if sync_data else 0
 
                 return PlaybackDataResponseDto(
                     audio_url=f"/static/books/{bookId}/{chapterId}/audio/full_chapter.mp3",
@@ -330,54 +297,43 @@ async def get_chapter_playback_data(bookId: str, chapterId: str, force_rebuild: 
             except Exception as e:
                 logger.warning(f"Cache corrupted for {chapterId}, rebuilding... {e}")
 
-        # Проверяем наличие сценария (без него мы вообще ничего не можем отдать)
-        if not context.scenario_file.exists():
-            raise HTTPException(status_code=404,
-                                detail=f"Scenario not found for {chapterId}. Cannot build playback data.")
+        entries = repo.get_scenario_entries(chapterId)
+        if not entries:
+            raise HTTPException(status_code=404, detail=f"Сценарий для {chapterId} не найден в БД.")
 
-        scenario_data = Scenario.load(context.scenario_file)
-
-        # Проверяем наличие исходных аудиофайлов
         has_source_audio = False
-        if context.chapter_audio_dir.exists():
-            for f in context.chapter_audio_dir.iterdir():
-                if f.is_file() and f.name != "full_chapter.mp3" and f.suffix.lower() in ['.wav', '.mp3', '.ogg',
-                                                                                         '.flac']:
+        if chapter_audio_dir.exists():
+            for f in chapter_audio_dir.iterdir():
+                if f.is_file() and f.name != "full_chapter.mp3" and f.suffix.lower() in ['.wav', '.mp3', '.ogg', '.flac']:
                     has_source_audio = True
                     break
 
         if not has_source_audio:
             logger.info(f"Audio not found for {chapterId}. Returning text-only sync map.")
-
-            text_only_map = []
-            for entry in scenario_data.entries:
-                text_only_map.append(SyncMapEntryDto(
-                    text=entry.text,
+            text_only_map = [
+                SyncMapEntryDto(
+                    text=entry.text or "",
                     start_ms=0,
                     end_ms=0,
-                    speaker=entry.speaker,
+                    speaker=entry.speaker_name or "Сказитель",
                     ambient=entry.ambient if entry.ambient else "none"
-                ))
-
+                ) for entry in entries
+            ]
             return PlaybackDataResponseDto(
                 audio_url=None,
                 duration_ms=0,
                 sync_map=text_only_map
             )
 
-        # Если аудио ЕСТЬ, запускаем склейку
+        # Сбор субтитров из реплик сценария в БД
         subtitles_map = {}
-        if context.subtitles_file.exists():
-            try:
-                sub_json = json.loads(context.subtitles_file.read_text("utf-8"))
-                if isinstance(sub_json, list):
-                    subtitles_map = {e.get("id"): e for e in sub_json if e.get("id")}
-            except Exception:
-                pass
+        for entry in entries:
+            if entry.audio_subtitles:
+                subtitles_map[str(entry.id)] = entry.audio_subtitles
 
         total_duration, sync_map_raw = merge_chapter_audio(
-            scenario=scenario_data,
-            audio_dir=context.chapter_audio_dir,
+            scenario=entries,
+            audio_dir=chapter_audio_dir,
             output_file_path=full_audio_path,
             subtitles_map=subtitles_map
         )
@@ -398,22 +354,27 @@ async def get_chapter_playback_data(bookId: str, chapterId: str, force_rebuild: 
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# Static Files
+# --- Static Files ---
 
 @static_router.get("/books/{bookId}/chars/{charId}.jpg")
 async def get_character_avatar(bookId: str, charId: str):
-    char_img_path = config.OUTPUT_DIR / bookId / "chars" / f"{charId}.jpg"
+    char_img_path = path_manager.get_book_output_dir(bookId) / "images" / f"{charId}.jpg"
     if not char_img_path.exists():
-        return HTTPException(status_code=404, detail="Avatar not found")
+        raise HTTPException(status_code=404, detail="Avatar not found")
     return FileResponse(char_img_path)
 
 
 @static_router.get("/books/{bookId}/cover.jpg")
 async def get_book_cover(bookId: str):
-    context = ProjectContext(book_name=bookId)
-    if context.cover_file.exists():
-        return FileResponse(context.cover_file)
-    raise HTTPException(status_code=404)
+    repo = BookRepository(book_id=bookId)
+    book = repo.get_book()
+    if book and book.cover_image_path:
+        cover_path = Path(book.cover_image_path)
+        if not cover_path.is_absolute():
+            cover_path = path_manager.get_book_output_dir(bookId) / cover_path
+        if cover_path.exists():
+            return FileResponse(cover_path)
+    raise HTTPException(status_code=404, detail="Cover image not found")
 
 
 @static_router.get("/books/{bookId}/{chapterId}/audio/")
@@ -425,16 +386,15 @@ async def get_chapter_audio_empty_check(bookId: str, chapterId: str):
 @static_router.get("/books/{bookId}/{chapterId}/audio/{audioFileName}")
 async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
     try:
-        vol, chap = parse_chapter_id(chapterId)
-        context = ProjectContext(book_name=bookId, volume_num=vol, chapter_num=chap)
-        audio_path = context.chapter_audio_dir / audioFileName
+        audio_dir = path_manager.get_chapter_audio_dir(bookId, chapterId)
+        audio_path = audio_dir / audioFileName
 
         if audio_path.exists():
             return FileResponse(audio_path)
 
         stem = audio_path.stem
         for ext in ['.wav', '.mp3', '.ogg', '.flac']:
-            alt_path = context.chapter_audio_dir / f"{stem}{ext}"
+            alt_path = audio_dir / f"{stem}{ext}"
             if alt_path.exists():
                 return FileResponse(alt_path)
 
@@ -447,8 +407,6 @@ async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
         raise HTTPException(status_code=404)
 
 
-# Global Ambient
-# TODO: пересмотреть логику эмбиентов на бэке: рассмотреть хранение в самой книге
 @static_router.get("/ambient/{ambientName}")
 async def get_global_ambient_file(ambientName: str):
     p = config.AMBIENT_DIR / ambientName

@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import config
 from api import state
 from api import tasks, projects, library, ai_tasks
-# from api.mobile import mobile_api_router
+from api.mobile import mobile_api_router
 from api.models import ServerStateEnum
 from core.task_queue import init_tasks_db, worker
 from main import Application
@@ -98,10 +98,10 @@ def create_app() -> FastAPI:
     app.include_router(library.router)
     app.include_router(ai_tasks.router)
     
-    # Mobile API routers (DISABLED)
-    # app.include_router(mobile_api_router.api_router)
-    # app.include_router(mobile_api_router.static_router)
-    # app.include_router(mobile_api_router.download_router)
+    # Mobile API routers
+    app.include_router(mobile_api_router.api_router)
+    app.include_router(mobile_api_router.static_router)
+    app.include_router(mobile_api_router.download_router)
 
     @app.get("/")
     async def root():
