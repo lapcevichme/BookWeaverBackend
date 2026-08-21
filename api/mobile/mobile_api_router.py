@@ -12,6 +12,7 @@ import config
 from api import state
 from api.security import verify_token
 from core.book_repository import BookRepository
+from core.data_models import Chapter, ChapterSummary
 from core import path_manager
 from utils.audio_merger import merge_chapter_audio
 
@@ -247,22 +248,24 @@ async def get_chapter_info(bookId: str, chapterId: str):
     try:
         vol, chap = parse_chapter_id(chapterId)
         repo = BookRepository(book_id=bookId)
-        db_chap = repo.get_chapter(chapterId)
+        with repo.get_session() as session:
+            db_chap = session.get(Chapter, chapterId)
+            summary = session.get(ChapterSummary, chapterId)
 
-        if db_chap and db_chap.summary:
-            return ChapterInfoDto(
-                chapter_id=chapterId,
-                title=db_chap.title or f"Том {vol}, Глава {chap}",
-                teaser=db_chap.summary.teaser,
-                synopsis=db_chap.summary.synopsis
-            )
-        else:
-            return ChapterInfoDto(
-                chapter_id=chapterId,
-                title=f"Том {vol}, Глава {chap}",
-                teaser="Описание пока не готово.",
-                synopsis=""
-            )
+            if summary:
+                return ChapterInfoDto(
+                    chapter_id=chapterId,
+                    title=(db_chap.title if db_chap and db_chap.title else f"Том {vol}, Глава {chap}"),
+                    teaser=summary.teaser,
+                    synopsis=summary.synopsis
+                )
+            else:
+                return ChapterInfoDto(
+                    chapter_id=chapterId,
+                    title=(db_chap.title if db_chap and db_chap.title else f"Том {vol}, Глава {chap}"),
+                    teaser="Описание пока не готово.",
+                    synopsis=""
+                )
     except Exception as e:
         logger.error(f"Ошибка /chapters/.../info: {e}")
         raise HTTPException(status_code=500, detail=str(e))
