@@ -1,6 +1,3 @@
-# TODO: Найти либу которая умеет делать подобное
-# Есть идея поручить это LLM, а не скрипту, потому что схема порой не оптимизированная
-
 from typing import Type, get_origin, get_args, Union, Literal
 from enum import Enum
 import inspect

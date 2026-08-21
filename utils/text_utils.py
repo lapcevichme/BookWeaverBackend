@@ -1,9 +1,9 @@
-# TODO: Найти библиотеки которые нормально все эти функции выполняют
 import json
+import re
 from pathlib import Path
+from typing import List
 
-# TODO: рассмотреть, насколько сейчас нужен этот метод. Раньше были проблемы с TXT, но при переходе на epub и парсинг с моей стороны это, похоже, бесполезно
-# UPD: 100% есть либа которая делает все это
+
 def cleanup_filename(name: str) -> str:
     """
     Очищает строку, чтобы ее можно было безопасно использовать в качестве имени файла.
@@ -24,8 +24,6 @@ def cleanup_filename(name: str) -> str:
 def load_pronunciation_dictionary(path: Path) -> dict:
     """
     Загружает словарь произношений из JSON файла.
-    Не работает для CosyVoice, модель под капотом слишком упрямая.
-    TODO: Найти способ* как для него ставить ударения (*Уничтожить TTS)
     """
     if not path.exists():
         return {}
@@ -33,13 +31,11 @@ def load_pronunciation_dictionary(path: Path) -> dict:
         return json.load(f)
 
 
-# TODO: при переходе на cosy voice посмотреть где возникают артефакты и пофиксить некоторые из них
-# WONTFIX: Я без понятия как появляются вообще артефакты у этой модели. Она иногда генерируется один и тот же текст на разные промпты
 def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
     """
     Полный конвейер предобработки текста для TTS:
     1. Применяет словарь произношений.
-    2. Очищает от нежелательных символов.
+    2. Очищает от нежелательных символов и пунктуационных дублей.
     """
     for word, pronunciation in dictionary.items():
         text = re.sub(r'\b' + re.escape(word) + r'\b', pronunciation, text, flags=re.IGNORECASE)
@@ -52,17 +48,14 @@ def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
     return text
 
 
-import re
-from typing import List
-
 def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> List[str]:
     """
-    Разбивает текст на чанки, стараясь не разрывать абзацы. Если бьет абзац, то делает overlap
+    Разбивает текст на чанки, стараясь не разрывать абзацы.
 
     Args:
         text: Исходный текст.
-        chunk_size: Максимальный размер чанка (6000-12000 для нормальной работы с JSON).
-        overlap: Размер перекрытия из конца предыдущего чанка для сохранения контекста (Не тестировал лучший размер).
+        chunk_size: Максимальный размер чанка.
+        overlap: Размер перекрытия из конца предыдущего чанка для сохранения контекста.
     """
     if not text:
         return []

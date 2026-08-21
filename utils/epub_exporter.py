@@ -232,9 +232,8 @@ class EpubExporter:
             book.add_item(epub.EpubNav())
 
             # Spine
-            spine = ['nav'] + epub_chapters
+            spine: List[Any] = ['nav'] + epub_chapters
             if glossary_chapter:
-                # FIXME: почему-то жалуется на передаваемый тип
                 spine.append(glossary_chapter)
             book.spine = spine
 
