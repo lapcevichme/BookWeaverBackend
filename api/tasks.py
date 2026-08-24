@@ -17,6 +17,10 @@ async def health_check():
 
 from core.task_queue import get_task, list_tasks
 
+import asyncio
+import json
+from fastapi.responses import StreamingResponse
+
 @router.get("/{task_id}/status", response_model=TaskStatusResponse)
 async def get_task_status(task_id: str):
     """Возвращает прогресс фоновой задачи."""
@@ -30,6 +34,38 @@ async def get_task_status(task_id: str):
         stage=task.stage,
         message=task.message
     )
+
+
+@router.get("/{task_id}/stream")
+async def stream_task_progress(task_id: str):
+    """
+    Стримит обновленный прогресс задачи в формате Server-Sent Events (SSE) в реальном времени.
+    """
+    task = get_task(task_id)
+    if not task:
+        raise HTTPException(status_code=404, detail="Задача не найдена.")
+
+    async def event_generator():
+        while True:
+            t = get_task(task_id)
+            if not t:
+                break
+
+            data = {
+                "task_id": t.id,
+                "status": t.status,
+                "progress": t.progress,
+                "stage": t.stage,
+                "message": t.message
+            }
+            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+            if t.status in ["complete", "failed", "cancelled"]:
+                break
+
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.get("/", response_model=Dict[str, TaskStatusResponse])

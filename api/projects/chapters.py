@@ -4,17 +4,18 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from sqlmodel import select
 
+from typing import List
 from core.book_repository import BookRepository
 from core import path_manager
 from core.data_models import ScenarioEntry
-from api.models import UpdateScenarioEntryRequest
+from api.models import UpdateScenarioEntryRequest, ChapterPreviewResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/entries")
+@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/entries", response_model=List[ScenarioEntry])
 async def get_chapter_entries(
     book_name: str,
     volume_num: int,
@@ -34,7 +35,7 @@ async def get_chapter_entries(
         return entries
 
 
-@router.patch("/{book_name}/entries/{entry_id}")
+@router.patch("/{book_name}/entries/{entry_id}", response_model=ScenarioEntry)
 async def update_scenario_entry(
     book_name: str,
     entry_id: UUID,
@@ -57,7 +58,7 @@ async def update_scenario_entry(
         return entry
 
 
-@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/preview")
+@router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/preview", response_model=ChapterPreviewResponse)
 async def get_chapter_preview(book_name: str, volume_num: int, chapter_num: int):
     """Возвращает текстовый превью главы (первые 1000 символов)."""
     vol_dir = path_manager.get_book_dir(book_name) / f"vol_{volume_num}"

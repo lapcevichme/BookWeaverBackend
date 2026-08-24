@@ -3,14 +3,14 @@ from fastapi import APIRouter, HTTPException
 from sqlmodel import select
 
 from core.book_repository import BookRepository
-from api.models import BookArtifactName
+from api.models import BookArtifactName, ProjectMetricsResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.get("/{book_name}/metrics")
+@router.get("/{book_name}/metrics", response_model=ProjectMetricsResponse)
 async def get_project_metrics(book_name: str):
     """Возвращает детальные метрики книги: токены, RTF и агрегированные ошибки."""
     from core.data_models import LLMMetric, AudioMetric, MetricCounter, ScenarioEntry

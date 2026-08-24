@@ -4,24 +4,25 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 
+from typing import List
 from core.book_repository import BookRepository
 from core import path_manager
 from core.data_models import Character
-from api.models import UpdateCharacterRequest
+from api.models import UpdateCharacterRequest, MessageResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.get("/{book_name}/characters")
+@router.get("/{book_name}/characters", response_model=List[Character])
 async def get_book_characters(book_name: str):
     """Возвращает список всех персонажей книги."""
     repo = BookRepository(book_id=book_name)
     return repo.get_characters()
 
 
-@router.patch("/{book_name}/characters/{char_id}")
+@router.patch("/{book_name}/characters/{char_id}", response_model=Character)
 async def update_character(
     book_name: str,
     char_id: UUID,
@@ -44,7 +45,7 @@ async def update_character(
         return char
 
 
-@router.delete("/{book_name}/characters/{char_id}")
+@router.delete("/{book_name}/characters/{char_id}", response_model=MessageResponse)
 async def delete_character(book_name: str, char_id: UUID):
     """Удаляет персонажа из БД книги."""
     repo = BookRepository(book_id=book_name)

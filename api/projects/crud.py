@@ -11,7 +11,7 @@ import config
 from core.book_repository import BookRepository
 from core import path_manager
 from core.data_models import Book, Chapter
-from api.models import UpdateBookRequest
+from api.models import UpdateBookRequest, ProjectDetailsResponse, MessageResponse, ImportProjectResponse
 from utils.book_converter import BookConverter
 from utils.exporter import BookExporter
 
@@ -33,7 +33,7 @@ class BookStructureUpdate(BaseModel):
     chapters: List[ChapterStructureItem]
 
 
-@router.get("/{book_name}")
+@router.get("/{book_name}", response_model=ProjectDetailsResponse)
 async def get_project_details(book_name: str):
     """Возвращает детали книги из её локальной БД."""
     repo = BookRepository(book_id=book_name)
@@ -67,7 +67,7 @@ async def get_project_details(book_name: str):
         }
 
 
-@router.patch("/{book_name}")
+@router.patch("/{book_name}", response_model=Book)
 async def update_project_metadata(book_name: str, req: UpdateBookRequest):
     """Обновляет метаданные книги в БД."""
     repo = BookRepository(book_id=book_name)
@@ -86,7 +86,7 @@ async def update_project_metadata(book_name: str, req: UpdateBookRequest):
         return book
 
 
-@router.delete("/{book_name}")
+@router.delete("/{book_name}", response_model=MessageResponse)
 async def delete_project(book_name: str):
     """Полностью удаляет проект (БД, вывод и входные файлы)."""
     book_output_dir = path_manager.get_book_output_dir(book_name)
@@ -103,7 +103,7 @@ async def delete_project(book_name: str):
     return {"message": f"Проект '{book_name}' успешно удален."}
 
 
-@router.post("/import")
+@router.post("/import", response_model=ImportProjectResponse)
 async def import_project(file: UploadFile = File(...)):
     """Загружает и конвертирует новую книгу."""
     temp_dir = config.BASE_DIR / "temp_uploads"
@@ -157,7 +157,7 @@ async def get_cover(book_name: str):
     return FileResponse(path)
 
 
-@router.post("/{book_name}/structure")
+@router.post("/{book_name}/structure", response_model=MessageResponse)
 async def update_project_structure(book_name: str, req: BookStructureUpdate):
     """Обновляет метаданные книги и структуру глав, удаляя лишние главы."""
     repo = BookRepository(book_id=book_name)

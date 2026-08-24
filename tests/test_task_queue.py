@@ -55,6 +55,18 @@ class TestTaskQueue(unittest.TestCase):
         t_resumed = get_task(task_id)
         self.assertEqual(t_resumed.status, TaskStatus.PROCESSING)
 
+    def test_task_stream_endpoint(self):
+        from fastapi.testclient import TestClient
+        from api_server import create_app
+        task_id = add_task("book_stream", "generate_scenario")
+        cancel_task(task_id)  # Mark cancelled so stream closes immediately
+
+        app = create_app()
+        client = TestClient(app)
+        res = client.get(f"/api/v1/tasks/{task_id}/stream")
+        self.assertEqual(res.status_code, 200)
+        self.assertIn("data: ", res.text)
+
 
 if __name__ == "__main__":
     unittest.main()

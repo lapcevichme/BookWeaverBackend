@@ -5,7 +5,23 @@ from pathlib import Path
 from typing import Optional
 from pydantic import BaseModel
 
+from sqlalchemy import event
+from sqlalchemy.engine import Engine
+
 logger = logging.getLogger(__name__)
+
+
+@event.listens_for(Engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    """Включает WAL-режим и внешний ключ (foreign keys) для высоких нагрузок на чтение/запись."""
+    try:
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL;")
+        cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.close()
+    except Exception as e:
+        logger.warning(f"Failed to set PRAGMA for SQLite connection: {e}")
+
 
 def pydantic_json_serializer(obj):
     """Кастомный сериализатор для JSON-колонок, понимающий Pydantic модели."""

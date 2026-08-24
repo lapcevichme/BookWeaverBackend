@@ -14,6 +14,72 @@ class ServerStatus(BaseModel):
     status: ServerStateEnum
     message: str = ""
 
+# --- Dashboard DTOs ---
+
+class DashboardRecentProject(BaseModel):
+    id: str
+    title: str
+    progress: float
+    total_chapters: int
+
+class DashboardSystemStatus(BaseModel):
+    storage_gb: float
+    llm_status: str
+    tts_status: str
+    active_tasks: int
+
+class DashboardSummaryResponse(BaseModel):
+    total_books: int
+    total_tokens: int
+    total_audio_minutes: float
+    recent_projects: List[DashboardRecentProject]
+    system: DashboardSystemStatus
+
+# --- Projects DTOs ---
+
+class ChapterStatusDto(BaseModel):
+    volume_num: int
+    chapter_num: int
+    id: str
+    title: Optional[str] = None
+    status: str
+    has_audio: bool
+
+class ProjectDetailsResponse(BaseModel):
+    book_id: str
+    title: str
+    author: Optional[str] = None
+    chapters: List[ChapterStatusDto]
+
+class ImportProjectResponse(BaseModel):
+    message: str
+    book_id: str
+
+class MessageResponse(BaseModel):
+    message: str
+
+class ChapterPreviewResponse(BaseModel):
+    preview: str
+
+# --- Metrics DTOs ---
+
+class ChapterMetricsDto(BaseModel):
+    chapter_id: str
+    llm_calls: int
+    total_tokens: int
+    audio_units: int
+    total_audio_duration_sec: float
+    avg_rtf: float
+    avg_cer: float
+    errors: Dict[str, int]
+
+class ProjectMetricsResponse(BaseModel):
+    book_id: str
+    total_tokens: int
+    counters: Dict[str, int]
+    chapters: List[ChapterMetricsDto]
+    character_activity: Dict[str, Dict[str, int]]
+
 # --- Tasks ---
 
 class ChapterTaskRequest(BaseModel):
@@ -26,7 +92,7 @@ class BookTaskRequest(BaseModel):
 
 class TaskStatusResponse(BaseModel):
     task_id: str
-    status: Literal["queued", "processing", "complete", "failed"]
+    status: Literal["queued", "processing", "complete", "failed", "cancelled", "paused"]
     progress: float
     stage: str
     message: str

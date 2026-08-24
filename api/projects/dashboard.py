@@ -1,17 +1,19 @@
 import logging
+from typing import List
 from fastapi import APIRouter
 from sqlmodel import select
 
 import config
 from core.book_repository import BookRepository
 from core import path_manager
+from api.models import DashboardSummaryResponse, DashboardRecentProject, DashboardSystemStatus
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-@router.get("/dashboard/summary")
+@router.get("/dashboard/summary", response_model=DashboardSummaryResponse)
 async def get_dashboard_summary():
     """Возвращает глобальную статистику по всей библиотеке."""
     from api import state
@@ -93,7 +95,7 @@ async def get_dashboard_summary():
     }
 
 
-@router.get("/")
+@router.get("/", response_model=List[str])
 async def list_projects():
     """Сканирует папку output и возвращает список проектов с базами данных."""
     books_dir = config.OUTPUT_DIR
