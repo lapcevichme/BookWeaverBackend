@@ -23,6 +23,47 @@ def get_audio_duration_ms(file_path: Path) -> int:
         logger.error(f"Ошибка при получении длительности {file_path.name}: {e}")
         return 0
 
+
+def normalize_audio_file(
+    src_path: Path,
+    dst_path: Path,
+    target_db: float = -25.0,
+    trim_silence: bool = True,
+    fade_ms: int = 50
+) -> bool:
+    """
+    Обрабатывает и нормализует аудиофайл (громкость, обрезка тишины, fade in/out).
+    """
+    try:
+        from pydub import AudioSegment
+        sound = AudioSegment.from_file(src_path)
+
+        if trim_silence:
+            def detect_leading_silence(snd, silence_threshold=-50.0, chunk_size=10):
+                trim_ms = 0
+                while snd[trim_ms:trim_ms + chunk_size].dBFS < silence_threshold and trim_ms < len(snd):
+                    trim_ms += chunk_size
+                return trim_ms
+
+            start_trim = detect_leading_silence(sound)
+            end_trim = detect_leading_silence(sound.reverse())
+            if start_trim + end_trim < len(sound):
+                sound = sound[start_trim: len(sound) - end_trim]
+
+        change_in_dBFS = target_db - sound.dBFS
+        sound = sound.apply_gain(change_in_dBFS)
+
+        if fade_ms > 0 and len(sound) > fade_ms * 2:
+            sound = sound.fade_in(fade_ms).fade_out(fade_ms)
+
+        dst_path.parent.mkdir(parents=True, exist_ok=True)
+        fmt = dst_path.suffix.lstrip('.') or "mp3"
+        sound.export(dst_path, format=fmt, bitrate="192k")
+        return True
+    except Exception as e:
+        logger.error(f"Ошибка нормализации аудио {src_path.name}: {e}")
+        return False
+
 def merge_chapter_audio(
         scenario: Scenario,
         audio_dir: Path,

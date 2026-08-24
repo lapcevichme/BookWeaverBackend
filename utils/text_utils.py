@@ -4,6 +4,22 @@ from pathlib import Path
 from typing import List
 
 
+def clean_raw_text(content: str) -> str:
+    """
+    Очищает сырой текст книги от типографического мусора:
+    - Удаляет неразрывные пробелы (\u00A0) и нульширинные пробелы (\u200b).
+    - Обрезает пробелы в конце каждой строки.
+    - Схлопывает 3+ переноса строк в двойной перенос.
+    """
+    if not content:
+        return ""
+    content = content.replace('\u00A0', ' ').replace('\u200b', '')
+    lines = [line.rstrip() for line in content.splitlines()]
+    content = '\n'.join(lines)
+    content = re.sub(r'\n{3,}', '\n\n', content)
+    return content.strip() + '\n'
+
+
 def cleanup_filename(name: str) -> str:
     """
     Очищает строку, чтобы ее можно было безопасно использовать в качестве имени файла.

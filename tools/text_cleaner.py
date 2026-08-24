@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 
 import config
+from utils.text_utils import clean_raw_text
 from utils.setup_logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -18,16 +19,9 @@ class TextCleaner:
 
     def clean_text(self, content: str) -> str:
         """
-        Основная логика очистки текста.
+        Основная логика очистки текста (делегируется в utils.text_utils).
         """
-        content = content.replace('\u00A0', ' ')
-        content = content.replace('\u200b', '')
-        lines = [line.rstrip() for line in content.splitlines()]
-        content = '\n'.join(lines)
-        content = re.sub(r'\n{3,}', '\n\n', content)
-        content = content.strip() + '\n'
-
-        return content
+        return clean_raw_text(content)
 
     def run(self, directory: Path):
         logger.info(f"--- ЗАПУСК ОЧИСТКИ ТЕКСТА ---")

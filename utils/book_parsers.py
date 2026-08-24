@@ -7,6 +7,7 @@ from bs4 import BeautifulSoup
 from markdownify import markdownify as md
 from pathlib import Path
 from typing import Dict, Optional, Tuple, Any, List
+from utils.text_utils import clean_raw_text
 
 
 class BookParser:
@@ -144,7 +145,7 @@ class EpubParser(BookParser):
                         img['src'] = f"../images/{flat_name}"
 
                 text = md(str(body), heading_style="ATX", strip=['a', 'script', 'style'])
-                text = re.sub(r'\n{3,}', '\n\n', text).strip()
+                text = clean_raw_text(text)
 
                 if not text: continue
 

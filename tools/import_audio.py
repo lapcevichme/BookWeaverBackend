@@ -4,6 +4,7 @@ from pathlib import Path
 from pydub import AudioSegment
 
 import config
+from utils.audio_merger import normalize_audio_file
 from utils.setup_logging import setup_logging
 
 logger = logging.getLogger(__name__)
@@ -40,32 +41,18 @@ class AudioImporter:
             new_filename = src_path.stem + ".mp3"
             dst_path = output_dir / new_filename
 
-            try:
-                sound = AudioSegment.from_file(src_path)
-                original_len = len(sound)
+            success = normalize_audio_file(
+                src_path=src_path,
+                dst_path=dst_path,
+                target_db=self.target_db,
+                trim_silence=self.trim_silence,
+                fade_ms=self.fade_ms
+            )
 
-                if self.trim_silence:
-                    start_trim = self.detect_leading_silence(sound)
-                    end_trim = self.detect_leading_silence(sound.reverse())
-
-                    if start_trim + end_trim < len(sound):
-                        sound = sound[start_trim: len(sound) - end_trim]
-
-                # Нормализация
-                change_in_dBFS = self.target_db - sound.dBFS
-                sound = sound.apply_gain(change_in_dBFS)
-
-                # Fade In/Out
-                if self.fade_ms > 0 and len(sound) > self.fade_ms * 2:
-                    sound = sound.fade_in(self.fade_ms).fade_out(self.fade_ms)
-
-                sound.export(dst_path, format="mp3", bitrate="192k")
-
-                logger.info(
-                    f"[{i + 1}/{len(files)}] OK: {new_filename} (Gain: {change_in_dBFS:+.1f}dB, Trim: {(original_len - len(sound)) / 1000:.2f}s)")
-
-            except Exception as e:
-                logger.error(f"Ошибка при обработке {src_path.name}: {e}")
+            if success:
+                logger.info(f"[{i + 1}/{len(files)}] OK: {new_filename}")
+            else:
+                logger.error(f"Ошибка при обработке {src_path.name}")
 
         logger.info("--- Импорт завершен ---")
 
