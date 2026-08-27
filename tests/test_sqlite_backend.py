@@ -53,6 +53,14 @@ class TestSQLiteBackend(unittest.TestCase):
         self.assertEqual(len(characters), 1)
         self.assertEqual(characters[0].name, "Hero")
 
+    def test_sqlite_pragmas(self):
+        with get_book_session(self.book_dir) as session:
+            from sqlalchemy import text
+            journal_mode = session.execute(text("PRAGMA journal_mode;")).scalar()
+            busy_timeout = session.execute(text("PRAGMA busy_timeout;")).scalar()
+            self.assertEqual(str(journal_mode).lower(), "wal")
+            self.assertEqual(int(busy_timeout), 5000)
+
     def test_fastapi_app_endpoints(self):
         app = create_app()
         client = TestClient(app)

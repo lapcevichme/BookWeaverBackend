@@ -46,6 +46,8 @@ async def stream_task_progress(task_id: str):
         raise HTTPException(status_code=404, detail="Задача не найдена.")
 
     async def event_generator():
+        last_payload = None
+        tick = 0
         while True:
             t = get_task(task_id)
             if not t:
@@ -58,14 +60,25 @@ async def stream_task_progress(task_id: str):
                 "stage": t.stage,
                 "message": t.message
             }
-            yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
+            payload = json.dumps(data, ensure_ascii=False)
+            if payload != last_payload or tick % 30 == 0:
+                yield f"data: {payload}\n\n"
+                last_payload = payload
+            else:
+                yield ": keepalive\n\n"
 
             if t.status in ["complete", "failed", "cancelled"]:
                 break
 
+            tick += 1
             await asyncio.sleep(0.5)
 
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-cache",
+        "Connection": "keep-alive",
+        "X-Accel-Buffering": "no"
+    }
+    return StreamingResponse(event_generator(), media_type="text/event-stream", headers=headers)
 
 
 @router.get("/", response_model=Dict[str, TaskStatusResponse])

@@ -112,12 +112,31 @@ class TestMobileAPI(unittest.TestCase):
         res_full = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=self.headers)
         self.assertEqual(res_full.status_code, 200)
 
-        # Range request
+        # Range request: fixed range
         range_headers = {**self.headers, "Range": "bytes=0-99"}
         res_range = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=range_headers)
         self.assertEqual(res_range.status_code, 206)
         self.assertEqual(res_range.headers.get("content-range"), "bytes 0-99/1000")
         self.assertEqual(len(res_range.content), 100)
+
+        # Range request: open-ended
+        open_range_headers = {**self.headers, "Range": "bytes=900-"}
+        res_open = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=open_range_headers)
+        self.assertEqual(res_open.status_code, 206)
+        self.assertEqual(res_open.headers.get("content-range"), "bytes 900-999/1000")
+        self.assertEqual(len(res_open.content), 100)
+
+        # Range request: suffix
+        suffix_range_headers = {**self.headers, "Range": "bytes=-50"}
+        res_suffix = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=suffix_range_headers)
+        self.assertEqual(res_suffix.status_code, 206)
+        self.assertEqual(res_suffix.headers.get("content-range"), "bytes 950-999/1000")
+        self.assertEqual(len(res_suffix.content), 50)
+
+        # Range request: invalid range
+        invalid_range_headers = {**self.headers, "Range": "bytes=2000-3000"}
+        res_invalid = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=invalid_range_headers)
+        self.assertEqual(res_invalid.status_code, 416)
 
 
 if __name__ == "__main__":

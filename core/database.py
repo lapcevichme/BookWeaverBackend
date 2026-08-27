@@ -13,11 +13,13 @@ logger = logging.getLogger(__name__)
 
 @event.listens_for(Engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
-    """Включает WAL-режим и внешний ключ (foreign keys) для высоких нагрузок на чтение/запись."""
+    """Включает WAL-режим, foreign keys и busy_timeout для высоких нагрузок на чтение/запись."""
     try:
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA journal_mode=WAL;")
         cursor.execute("PRAGMA foreign_keys=ON;")
+        cursor.execute("PRAGMA busy_timeout=5000;")
+        cursor.execute("PRAGMA synchronous=NORMAL;")
         cursor.close()
     except Exception as e:
         logger.warning(f"Failed to set PRAGMA for SQLite connection: {e}")

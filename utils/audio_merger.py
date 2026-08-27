@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 from core.data_models import Scenario
 
 from fastapi import HTTPException, Request
@@ -13,13 +13,28 @@ from fastapi.responses import FileResponse, StreamingResponse
 logger = logging.getLogger(__name__)
 
 
-def ranged_file_response(request: Request, file_path: Path, content_type: str = "audio/mpeg"):
+def ranged_file_response(request: Request, file_path: Path, content_type: Optional[str] = None):
     """
     Отдает файл с поддержкой HTTP Range Header (206 Partial Content).
     Необходимо для мгновенной перемотки аудиофайлов в мобильном плеере (iOS AVPlayer, Android ExoPlayer).
     """
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Файл не найден.")
+
+    if not content_type:
+        ext = file_path.suffix.lower()
+        mime_map = {
+            ".mp3": "audio/mpeg",
+            ".wav": "audio/wav",
+            ".ogg": "audio/ogg",
+            ".flac": "audio/flac",
+            ".m4a": "audio/mp4",
+            ".aac": "audio/aac",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png"
+        }
+        content_type = mime_map.get(ext, "audio/mpeg")
 
     file_size = file_path.stat().st_size
     range_header = request.headers.get("range")
@@ -37,8 +52,21 @@ def ranged_file_response(request: Request, file_path: Path, content_type: str = 
             raise ValueError
 
         start_str, end_str = ranges.split("-")
-        start = int(start_str) if start_str else 0
-        end = int(end_str) if end_str else file_size - 1
+        if not start_str and not end_str:
+            raise ValueError
+
+        if not start_str:
+            # Suffix byte range: e.g. bytes=-500 (last 500 bytes)
+            length = int(end_str)
+            start = max(0, file_size - length)
+            end = file_size - 1
+        elif not end_str:
+            # Open-ended range: e.g. bytes=500- (from 500 to end)
+            start = int(start_str)
+            end = file_size - 1
+        else:
+            start = int(start_str)
+            end = int(end_str)
 
         if start >= file_size or end >= file_size or start > end:
             raise HTTPException(
