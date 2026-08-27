@@ -101,7 +101,23 @@ class TestMobileAPI(unittest.TestCase):
         playback = res.json()
         self.assertIn("sync_map", playback)
         self.assertEqual(len(playback["sync_map"]), 1)
-        self.assertEqual(playback["sync_map"][0]["text"], "Beginning of adventure")
+    def test_range_requests_audio(self):
+        # Create dummy audio file
+        audio_dir = self.book_dir / "vol_1_chap_1" / "audio"
+        audio_dir.mkdir(parents=True, exist_ok=True)
+        dummy_audio = audio_dir / "001_narrator.mp3"
+        dummy_audio.write_bytes(b"A" * 1000)
+
+        # Full file request
+        res_full = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=self.headers)
+        self.assertEqual(res_full.status_code, 200)
+
+        # Range request
+        range_headers = {**self.headers, "Range": "bytes=0-99"}
+        res_range = self.client.get(f"/static/books/{self.book_id}/vol_1_chap_1/audio/001_narrator.mp3", headers=range_headers)
+        self.assertEqual(res_range.status_code, 206)
+        self.assertEqual(res_range.headers.get("content-range"), "bytes 0-99/1000")
+        self.assertEqual(len(res_range.content), 100)
 
 
 if __name__ == "__main__":

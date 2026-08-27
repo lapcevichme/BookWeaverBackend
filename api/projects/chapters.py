@@ -75,10 +75,18 @@ async def get_chapter_preview(book_name: str, volume_num: int, chapter_num: int)
         raise HTTPException(status_code=500, detail=f"Ошибка чтения файла главы: {e}")
 
 
+from fastapi import APIRouter, HTTPException, Request
+from utils.audio_merger import ranged_file_response
+
+
 @router.get("/{book_name}/chapters/{volume_num}/{chapter_num}/audio/{audio_file_name}")
-async def get_audio_file(book_name: str, volume_num: int, chapter_num: int, audio_file_name: str):
+async def get_audio_file(
+    request: Request,
+    book_name: str,
+    volume_num: int,
+    chapter_num: int,
+    audio_file_name: str
+):
     chapter_id = f"vol_{volume_num}_chap_{chapter_num}"
     path = path_manager.get_chapter_audio_dir(book_name, chapter_id) / audio_file_name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Файл не найден.")
-    return FileResponse(path)
+    return ranged_file_response(request, path)

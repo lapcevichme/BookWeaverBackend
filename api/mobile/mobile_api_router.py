@@ -5,7 +5,7 @@ import socket
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 import config
@@ -14,7 +14,7 @@ from api.security import verify_token
 from core.book_repository import BookRepository
 from core.data_models import Chapter, ChapterSummary
 from core import path_manager
-from utils.audio_merger import merge_chapter_audio
+from utils.audio_merger import merge_chapter_audio, ranged_file_response
 
 from api.mobile.mobile_api_models import (
     BookStructureResponseDto,
@@ -387,19 +387,19 @@ async def get_chapter_audio_empty_check(bookId: str, chapterId: str):
 
 
 @static_router.get("/books/{bookId}/{chapterId}/audio/{audioFileName}")
-async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
+async def get_chapter_audio(request: Request, bookId: str, chapterId: str, audioFileName: str):
     try:
         audio_dir = path_manager.get_chapter_audio_dir(bookId, chapterId)
         audio_path = audio_dir / audioFileName
 
         if audio_path.exists():
-            return FileResponse(audio_path)
+            return ranged_file_response(request, audio_path)
 
         stem = audio_path.stem
         for ext in ['.wav', '.mp3', '.ogg', '.flac']:
             alt_path = audio_dir / f"{stem}{ext}"
             if alt_path.exists():
-                return FileResponse(alt_path)
+                return ranged_file_response(request, alt_path)
 
         raise HTTPException(status_code=404, detail="Audio file not found")
 
@@ -411,7 +411,7 @@ async def get_chapter_audio(bookId: str, chapterId: str, audioFileName: str):
 
 
 @static_router.get("/ambient/{ambientName}")
-async def get_global_ambient_file(ambientName: str):
+async def get_global_ambient_file(request: Request, ambientName: str):
     p = config.AMBIENT_DIR / ambientName
     if not p.exists():
         for ext in ['.mp3', '.wav', '.ogg']:
@@ -419,11 +419,11 @@ async def get_global_ambient_file(ambientName: str):
                 p = config.AMBIENT_DIR / (ambientName + ext)
                 break
     if p.exists():
-        return FileResponse(p)
+        return ranged_file_response(request, p)
     logger.warning(f"Эмбиент не найден: {ambientName}")
     raise HTTPException(status_code=404, detail="Ambient file not found")
 
 
 @static_router.get("/books/{bookId}/ambient/{ambientName}")
-async def get_ambient_file_legacy(bookId: str, ambientName: str):
-    return await get_global_ambient_file(ambientName)
+async def get_ambient_file_legacy(request: Request, bookId: str, ambientName: str):
+    return await get_global_ambient_file(request, ambientName)

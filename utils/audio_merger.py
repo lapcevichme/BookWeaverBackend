@@ -7,7 +7,80 @@ from pathlib import Path
 from typing import List, Dict, Tuple
 from core.data_models import Scenario
 
+from fastapi import HTTPException, Request
+from fastapi.responses import FileResponse, StreamingResponse
+
 logger = logging.getLogger(__name__)
+
+
+def ranged_file_response(request: Request, file_path: Path, content_type: str = "audio/mpeg"):
+    """
+    Отдает файл с поддержкой HTTP Range Header (206 Partial Content).
+    Необходимо для мгновенной перемотки аудиофайлов в мобильном плеере (iOS AVPlayer, Android ExoPlayer).
+    """
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Файл не найден.")
+
+    file_size = file_path.stat().st_size
+    range_header = request.headers.get("range")
+
+    if not range_header:
+        return FileResponse(
+            file_path,
+            media_type=content_type,
+            headers={"Accept-Ranges": "bytes"}
+        )
+
+    try:
+        unit, ranges = range_header.strip().split("=")
+        if unit != "bytes":
+            raise ValueError
+
+        start_str, end_str = ranges.split("-")
+        start = int(start_str) if start_str else 0
+        end = int(end_str) if end_str else file_size - 1
+
+        if start >= file_size or end >= file_size or start > end:
+            raise HTTPException(
+                status_code=416,
+                detail="Requested Range Not Satisfiable",
+                headers={"Content-Range": f"bytes */{file_size}"}
+            )
+
+        chunk_size = end - start + 1
+
+        def stream_file():
+            with open(file_path, "rb") as f:
+                f.seek(start)
+                remaining = chunk_size
+                buffer_size = 64 * 1024
+                while remaining > 0:
+                    read_size = min(buffer_size, remaining)
+                    data = f.read(read_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(chunk_size),
+        }
+        return StreamingResponse(
+            stream_file(),
+            status_code=206,
+            headers=headers,
+            media_type=content_type
+        )
+    except HTTPException:
+        raise
+    except Exception:
+        return FileResponse(
+            file_path,
+            media_type=content_type,
+            headers={"Accept-Ranges": "bytes"}
+        )
 
 def get_audio_duration_ms(file_path: Path) -> int:
     """Получает длительность аудиофайла в миллисекундах через ffprobe."""
