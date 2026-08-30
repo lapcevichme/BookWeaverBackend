@@ -2,20 +2,18 @@ import logging
 from pathlib import Path
 from threading import Lock
 import config
-from services.base_service import BaseTorchService
 from services.cosyvoice_client import CosyVoiceClient
 
 logger = logging.getLogger(__name__)
 
 
-class TTSService(BaseTorchService):
+class TTSService:
     """
-    Сервис для TTS (CosyVoice API) и Whisper (Local Aligner).
-    Поддерживает VRAM Orchestration для Whisper.
+    Сервис для TTS (CosyVoice API) и C++ Whisper (pywhispercpp Aligner & Transcriber).
+    Не требует PyTorch в основном бэкенд-процессе.
     """
 
     def __init__(self):
-        super().__init__()
         self.cosy_client = CosyVoiceClient(base_url=config.COSYVOICE_API_URL)
 
         self._whisper_model = None
@@ -26,53 +24,44 @@ class TTSService(BaseTorchService):
 
     @property
     def whisper_model(self):
-        """Ленивая загрузка Whisper (локально)."""
+        """Ленивая загрузка C++ Whisper (pywhispercpp)."""
         if self._whisper_model is None:
             with self._whisper_load_lock:
                 if self._whisper_model is None:
                     try:
-                        import stable_whisper
-                    except ImportError:
-                        logger.critical("❌ Библиотека 'stable-ts' не установлена!")
-                        return None
-
-                    logger.info("⏳ VRAM: Загрузка весов stable_whisper (base) в видеопамять...")
-                    try:
-                        self._whisper_model = stable_whisper.load_model("base", device=self.device)
-                        self._is_loaded = True
-                        logger.info("✅ Модель Whisper загружена.")
+                        from pywhispercpp.model import Model
+                        models_dir = config.OUTPUT_DIR / "whisper_models"
+                        models_dir.mkdir(parents=True, exist_ok=True)
+                        logger.info(f"⏳ C++ Whisper: Загрузка модели pywhispercpp (base) из {models_dir}...")
+                        self._whisper_model = Model(
+                            "base",
+                            models_dir=str(models_dir),
+                            print_realtime=False,
+                            print_progress=False
+                        )
+                        logger.info("✅ C++ Модель pywhispercpp (base) успешно загружена.")
                     except Exception as e:
-                        logger.error(f"❌ Ошибка загрузки Whisper: {e}", exc_info=True)
+                        logger.error(f"❌ Ошибка загрузки C++ Whisper (pywhispercpp): {e}", exc_info=True)
                         return None
 
         return self._whisper_model
 
     def unload(self):
-        """
-        Принудительно выгружает Whisper из VRAM.
-        """
+        """Выгружает C++ модель Whisper из памяти."""
         if self._whisper_model is not None:
-            logger.info("VRAM: Выгрузка модели Whisper...")
+            logger.info("Выгрузка C++ модели Whisper...")
             del self._whisper_model
             self._whisper_model = None
-            self._is_loaded = False
-
-            self._clear_cuda_cache()
-        else:
-            logger.debug("VRAM: Whisper уже выгружен или не был загружен.")
 
     def _get_prompt_text(self, speaker_wav_path: Path) -> str:
         """Получает текст из референсного аудио (кэширует результат на диск)."""
         path_str = str(speaker_wav_path)
-        
-        # 1. Проверяем в оперативной памяти
+
         if path_str in self._reference_transcription_cache:
             return self._reference_transcription_cache[path_str]
 
-        # Путь к файлу транскрипции рядом с аудио
         txt_path = speaker_wav_path.with_suffix(speaker_wav_path.suffix + ".txt")
 
-        # 2. Проверяем файл на диске
         if txt_path.exists() and txt_path.is_file():
             try:
                 text = txt_path.read_text(encoding="utf-8").strip()
@@ -82,36 +71,33 @@ class TTSService(BaseTorchService):
             except Exception as e:
                 logger.error(f"Ошибка чтения файла транскрипции {txt_path}: {e}")
 
-        # 3. Если нет, транскрибируем Whisper'ом
         model = self.whisper_model
         if not model:
             return " "
 
         try:
-            logger.info(f"Транскрипция референса через Whisper: {speaker_wav_path.name}")
-            result = model.transcribe(path_str)
-            text = result.text.strip()
-            
-            # Сохраняем на диск и кэшируем в памяти
+            logger.info(f"Транскрипция референса через C++ Whisper (pywhispercpp): {speaker_wav_path.name}")
+            segments = model.transcribe(path_str)
+            text = " ".join([s.text for s in segments]).strip()
+
             try:
                 txt_path.write_text(text, encoding="utf-8")
             except Exception as e:
                 logger.error(f"Не удалось записать файл транскрипции {txt_path}: {e}")
-                
+
             self._reference_transcription_cache[path_str] = text
             return text
         except Exception as e:
-            logger.error(f"Ошибка транскрипции референса: {e}")
+            logger.error(f"Ошибка транскрипции референса pywhispercpp: {e}")
             return " "
 
     def synthesize(self, text: str, speaker_wav_path: Path, emotion: str = None) -> bytes | None:
-        """Синтез через API (не требует VRAM этого процесса)."""
+        """Синтез речи через API CosyVoice."""
         if not speaker_wav_path.exists():
             logger.error(f"Файл-образец голоса не найден: {speaker_wav_path}")
             return None
 
         prompt_text = self._get_prompt_text(speaker_wav_path)
-
         instruct_text = emotion if emotion and emotion.lower() != "neutral" else ""
 
         return self.cosy_client.synthesize(
@@ -123,14 +109,23 @@ class TTSService(BaseTorchService):
         )
 
     def generate_word_timings(self, text: str, audio_path: Path, language: str = "ru") -> list | None:
-        """Генерирует таймкоды (субтитры) через Whisper."""
+        """Генерирует таймкоды (субтитры) через C++ Whisper."""
         model = self.whisper_model
         if not model or not audio_path.exists():
             return None
 
         try:
-            result = model.align(str(audio_path), text, language=language)
-            return [{'word': w.word, 'start': w.start, 'end': w.end} for s in result.segments for w in s.words]
+            segments = model.transcribe(str(audio_path), language=language)
+            timings = []
+            for s in segments:
+                word_text = s.text.strip()
+                if word_text:
+                    timings.append({
+                        'word': word_text,
+                        'start': round(s.t0 / 100.0, 2),
+                        'end': round(s.t1 / 100.0, 2)
+                    })
+            return timings
         except Exception as e:
-            logger.error(f"Ошибка выравнивания: {e}", exc_info=True)
+            logger.error(f"Ошибка генерирования таймкодов pywhispercpp: {e}", exc_info=True)
             return None

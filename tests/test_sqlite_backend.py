@@ -75,6 +75,25 @@ class TestSQLiteBackend(unittest.TestCase):
         response = client.get("/api/v1/projects/")
         self.assertEqual(response.status_code, 200)
 
+    def test_pywhispercpp_tts_service(self):
+        import wave, struct, math
+        from services.tts_service import TTSService
+        service = TTSService()
+        
+        audio_path = self.temp_dir / "sample.wav"
+        with wave.open(str(audio_path), 'w') as f:
+            f.setnchannels(1)
+            f.setsampwidth(2)
+            f.setframerate(16000)
+            for i in range(16000 * 2):
+                val = int(32767.0 * 0.3 * math.sin(2.0 * math.pi * 440.0 * i / 16000))
+                f.writeframes(struct.pack('<h', val))
+
+        txt = service._get_prompt_text(audio_path)
+        self.assertIsInstance(txt, str)
+        timings = service.generate_word_timings("sample", audio_path)
+        self.assertIsInstance(timings, list)
+
 
 if __name__ == "__main__":
     unittest.main()

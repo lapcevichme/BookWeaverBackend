@@ -20,7 +20,7 @@ PACKAGE_MAPPING = {
     "jwt": "python-jose",
     "uvicorn": "uvicorn[standard]",
     "ffmpeg": "ffmpeg-python",
-    "stable_whisper": "stable-ts",
+    "pywhispercpp": "pywhispercpp",
 }
 
 IGNORE_DIRS = {
