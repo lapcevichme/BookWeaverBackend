@@ -1,0 +1,18 @@
+name: bookweaver
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: bookweaver_backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./output:/app/output
+      - ./input:/app/input
+      - ./assets:/app/assets
+      - ./logs:/app/logs
+    restart: unless-stopped

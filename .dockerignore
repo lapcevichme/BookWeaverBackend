@@ -1,0 +1,16 @@
+.git
+.gitignore
+.venv
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.idea
+.vscode
+web_ui
+logs/*
+output/*
+input/*
+temp/*
+temp_uploads/*
+was_in_root
