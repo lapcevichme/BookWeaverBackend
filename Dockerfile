@@ -5,7 +5,6 @@ RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries && \
     echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/80retries && \
     apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     ffmpeg \
-    build-essential \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
