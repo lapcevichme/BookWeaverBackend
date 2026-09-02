@@ -1,7 +1,9 @@
 FROM python:3.12-slim
 
-# Установка системных утилит (ffmpeg для аудио и build-essential для C++ pywhispercpp)
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# Настройка повторов apt при сбоях сетевого подключения к репозиториям debian
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries && \
+    echo 'Acquire::http::Timeout "30";' >> /etc/apt/apt.conf.d/80retries && \
+    apt-get update && apt-get install -y --no-install-recommends --fix-missing \
     ffmpeg \
     build-essential \
     curl \

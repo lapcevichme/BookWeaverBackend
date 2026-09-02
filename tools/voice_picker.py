@@ -4,8 +4,11 @@ import logging
 import requests
 from typing import List, Dict, Optional
 from pathlib import Path
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-import pygame
+try:
+    os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
+    import pygame
+except ImportError:
+    pygame = None
 
 import config
 from utils.setup_logging import setup_logging
