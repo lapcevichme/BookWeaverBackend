@@ -10,9 +10,9 @@ RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80retries && \
 
 WORKDIR /app
 
-# Кэширование и установка зависимостей Python
+# Кэширование и надежная установка зависимостей Python (с таймаутом 100с и ретраями)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --default-timeout=100 --retries 5 --no-cache-dir -r requirements.txt
 
 # Копирование исходного кода приложения
 COPY . .

@@ -14,12 +14,13 @@ logger = logging.getLogger(__name__)
 PydanticModel = TypeVar("PydanticModel", bound=BaseModel)
 
 PRICING_REGISTRY = {
-    "xiaomi/mimo-v2-flash:free" : {"input": 0.0, "output": 0.0}
+    "xiaomi/mimo-v2-flash:free": {"input": 0.0, "output": 0.0}
 }
+
 
 class LLMService:
     """
-    Централизованный класс для работы с LLM (Google Gemini или OpenRouter) с ленивой инициализацией.
+    Централизованный класс для работы с LLM (Google Gemini или OpenRouter) через единый клиент OpenAI SDK.
     """
 
     def __init__(self, model_name: str, temperature: float = 0.5, provider: str = "google", api_key: str = None):
@@ -27,9 +28,7 @@ class LLMService:
         self.temperature = temperature
         self.provider = provider.lower()
         self.api_key = api_key
-        self._model = None
         self._client = None
-        self._config = None
         self._lock = Lock()
 
         self.total_input_tokens = 0
@@ -37,46 +36,24 @@ class LLMService:
         self.total_cost = 0.0
 
         logger.info(
-            f"Сервис LLMService сконфигурирован: провайдер '{self.provider}', модель '{self.model_name}' (ленивая загрузка).")
+            f"Сервис LLMService сконфигурирован: провайдер '{self.provider}', модель '{self.model_name}'."
+        )
 
     @property
-    def model(self):
-        if self.provider == "google":
-            return self._init_google_model()
-        elif self.provider == "openrouter":
-            return self._init_openrouter_client()
-        return None
-
-    def _init_google_model(self):
-        if self._model is None:
-            with self._lock:
-                if self._model is None:
-                    import google.generativeai as genai
-                    api_key = self.api_key or os.getenv("GOOGLE_API_KEY")
-                    if api_key:
-                        genai.configure(api_key=api_key)
-                    self._model = genai.GenerativeModel(self.model_name)
-        return self._model
-
-    def _init_openrouter_client(self):
+    def client(self):
         if self._client is None:
             with self._lock:
                 if self._client is None:
                     from openai import OpenAI
-                    api_key = self.api_key or os.getenv("OPENROUTER_API_KEY")
-                    self._client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
-        return self._client
+                    if self.provider == "google":
+                        api_key = self.api_key or os.getenv("GOOGLE_API_KEY")
+                        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+                    else:
+                        api_key = self.api_key or os.getenv("OPENROUTER_API_KEY")
+                        base_url = "https://openrouter.ai/api/v1"
 
-    @property
-    def generation_config(self):
-        if self.provider != "google": return None
-        if self._config is None:
-            from google.generativeai.types import GenerationConfig
-            gen_config_args = {"temperature": self.temperature}
-            if "gemma" not in self.model_name.lower():
-                gen_config_args["response_mime_type"] = "application/json"
-            self._config = GenerationConfig(**gen_config_args)
-        return self._config
+                    self._client = OpenAI(base_url=base_url, api_key=api_key)
+        return self._client
 
     def _track_usage(self, input_tokens: int, output_tokens: int):
         self.total_input_tokens += input_tokens
@@ -93,11 +70,7 @@ class LLMService:
         error_msg = None
 
         try:
-            if self.provider == "openrouter":
-                response_text, usage = self._raw_call_openrouter(prompt)
-            else:
-                response_text, usage = self._raw_call_google(prompt)
-            
+            response_text, usage = self._raw_call_llm(prompt)
             if not response_text:
                 status = "api_error"
             else:
@@ -124,58 +97,38 @@ class LLMService:
             ))
         return None
 
-    def _raw_call_google(self, prompt: str) -> Tuple[Optional[str], Tuple[int, int]]:
-        from google.api_core import exceptions
-        from google.generativeai.types import RequestOptions
-        
+    def _raw_call_llm(self, prompt: str) -> Tuple[Optional[str], Tuple[int, int]]:
         max_retries = 3
         for attempt in range(max_retries):
-            if attempt > 0: metrics_collector.increment("api_retries")
+            if attempt > 0:
+                metrics_collector.increment("api_retries")
             try:
-                response = self.model.generate_content(
-                    prompt, 
-                    generation_config=self.generation_config,
-                    request_options=RequestOptions(timeout=120)
-                )
-                if not response.candidates: return None, (0, 0)
-                
-                usage = (0, 0)
-                if hasattr(response, 'usage_metadata'):
-                    usage = (response.usage_metadata.prompt_token_count, response.usage_metadata.candidates_token_count)
-                    self._track_usage(*usage)
-                
-                return response.text, usage
-            except exceptions.ResourceExhausted:
-                time.sleep(5)
-            except Exception:
-                time.sleep(2)
-        return None, (0, 0)
+                kwargs = {
+                    "model": self.model_name,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "temperature": self.temperature,
+                }
+                if "gemma" not in self.model_name.lower():
+                    kwargs["response_format"] = {"type": "json_object"}
 
-    def _raw_call_openrouter(self, prompt: str) -> Tuple[Optional[str], Tuple[int, int]]:
-        max_retries = 3
-        for attempt in range(max_retries):
-            if attempt > 0: metrics_collector.increment("api_retries")
-            try:
-                completion = self.model.chat.completions.create(
-                    model=self.model_name,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=self.temperature,
-                    response_format={"type": "json_object"}
-                )
+                completion = self.client.chat.completions.create(**kwargs)
                 usage = (0, 0)
                 if completion.usage:
                     usage = (completion.usage.prompt_tokens, completion.usage.completion_tokens)
                     self._track_usage(*usage)
-                return completion.choices[0].message.content, usage
-            except Exception:
+
+                content = completion.choices[0].message.content if completion.choices else None
+                return content, usage
+            except Exception as e:
+                logger.warning(f"LLM API Call attempt {attempt + 1} failed: {e}")
                 time.sleep(2)
         return None, (0, 0)
 
     def _process_response_text(self, text: str, pydantic_model: Type[PydanticModel]) -> Optional[PydanticModel]:
-        # Очистка JSON
         text = re.sub(r'[\x00-\x1F]', '', text)
         match = re.search(r'```json\s*(\{.*}|\[.*])\s*```', text, re.DOTALL) or re.search(r'(\{.*}|\[.*])', text, re.DOTALL)
-        if not match: return None
+        if not match:
+            return None
         try:
             return pydantic_model.model_validate_json(match.group(1).strip())
         except ValidationError as ve:
