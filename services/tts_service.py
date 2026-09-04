@@ -115,7 +115,12 @@ class TTSService:
             return None
 
         try:
-            segments = model.transcribe(str(audio_path), language=language)
+            segments = model.transcribe(
+                str(audio_path),
+                language=language,
+                token_timestamps=True,
+                max_len=1
+            )
             timings = []
             for s in segments:
                 word_text = s.text.strip()
