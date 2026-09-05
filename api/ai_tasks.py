@@ -13,30 +13,29 @@ router = APIRouter(
 
 @router.post("/analyze-characters", response_model=TaskStatusResponse, status_code=202)
 async def start_character_analysis(req: BookTaskRequest):
-    """Анализирует персонажей во всей книге (LLM)."""
+    """Анализирует персонажей во всей (или первых N) книге (LLM)."""
     return state.start_task(
         task_type="process_book",
         book_id=req.book_name,
-        book_name=req.book_name
+        book_name=req.book_name,
+        max_chapters=req.max_chapters
     )
 
 
 @router.post("/generate-summaries", response_model=TaskStatusResponse, status_code=202)
 async def start_summary_generation(req: BookTaskRequest):
-    """Генерирует пересказы для всех глав (LLM)."""
+    """Генерирует пересказы для всех (или первых N) глав (LLM)."""
     return state.start_task(
         task_type="generate_summary",
         book_id=req.book_name,
-        book_name=req.book_name
+        book_name=req.book_name,
+        max_chapters=req.max_chapters
     )
 
 
 @router.post("/generate-scenario", response_model=TaskStatusResponse, status_code=202)
 async def start_scenario_generation(req: ChapterTaskRequest):
     """Генерирует сценарий для одной главы (LLM + Sound Design)."""
-    # Мы сохраняем передачу параметров для создания ProjectContext внутри воркера
-    # Или передаем сам объект (но JSON-сериализация объектов может быть сложной)
-    # Лучше передать параметры
     return state.start_task(
         task_type="generate_scenario",
         book_id=req.book_name,
@@ -59,11 +58,12 @@ async def start_tts_synthesis(req: ChapterTaskRequest):
 
 @router.post("/full-cycle", response_model=TaskStatusResponse, status_code=202)
 async def start_full_cycle(req: BookTaskRequest):
-    """Запускает полный цикл: Саммари -> Персонажи -> Сценарии для всей книги."""
+    """Запускает полный цикл: Саммари -> Персонажи -> Сценарии (с опциональным ограничением max_chapters)."""
     return state.start_task(
         task_type="full_cycle",
         book_id=req.book_name,
-        book_name=req.book_name
+        book_name=req.book_name,
+        max_chapters=req.max_chapters
     )
 
 

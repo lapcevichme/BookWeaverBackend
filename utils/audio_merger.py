@@ -177,6 +177,7 @@ def merge_chapter_audio(
     sync_map = []
     current_offset_ms = 0
     audio_files_to_concat = []
+    sfx_events = []
     
     missing_files_count = 0
     logger.info(f"Начинаем оптимизированную склейку аудио для {output_file_path.name}")
@@ -219,6 +220,16 @@ def merge_chapter_audio(
 
         sync_item["start_ms"] = entry_start
         sync_item["end_ms"] = entry_end
+
+        sfx_name = getattr(entry, 'sfx', None)
+        if sfx_name and str(sfx_name).lower() != 'none':
+            sync_item["sfx"] = sfx_name
+            import config
+            for ext in ['.wav', '.mp3', '.ogg', '.flac']:
+                sfx_path = config.SFX_DIR / f"{sfx_name}{ext}"
+                if sfx_path.exists():
+                    sfx_events.append((entry_start, sfx_path))
+                    break
 
         # Alignment (субтитры по словам) - читаем из БД
         if hasattr(entry, 'audio_subtitles') and entry.audio_subtitles and 'words' in entry.audio_subtitles:
@@ -263,6 +274,23 @@ def merge_chapter_audio(
         ]
         
         subprocess.run(cmd, check=True, capture_output=True)
+
+        # Подмешивание SFX поверх трека
+        if sfx_events:
+            try:
+                from pydub import AudioSegment
+                main_track = AudioSegment.from_file(output_file_path)
+                for start_ms, sfx_path in sfx_events:
+                    try:
+                        sfx_track = AudioSegment.from_file(sfx_path)
+                        main_track = main_track.overlay(sfx_track, position=start_ms)
+                    except Exception as se:
+                        logger.error(f"Ошибка подмешивания SFX {sfx_path.name}: {se}")
+                main_track.export(output_file_path, format="mp3", bitrate="192k")
+                logger.info(f"✅ Успешно подмешано {len(sfx_events)} SFX эффектов в {output_file_path.name}")
+            except Exception as e:
+                logger.error(f"Ошибка обработки SFX: {e}")
+
         logger.info(f"✅ Успешно склеено в {output_file_path.name}. Итого: {current_offset_ms} мс")
         
     except subprocess.CalledProcessError as e:

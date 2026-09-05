@@ -89,6 +89,7 @@ class ChapterTaskRequest(BaseModel):
 
 class BookTaskRequest(BaseModel):
     book_name: str
+    max_chapters: Optional[int] = Field(None, description="Ограничение количества глав для частичного анализа LLM (например 3 или 4)")
 
 class TaskStatusResponse(BaseModel):
     task_id: str

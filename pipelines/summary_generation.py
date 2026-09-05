@@ -20,7 +20,7 @@ class SummaryGenerationPipeline:
         self.model_manager = model_manager
         logger.info("✅ Пайплайн SummaryGenerationPipeline инициализирован.")
 
-    def run(self, book_name: str, progress_callback: Optional[Callable[[float, str, str], None]] = None):
+    def run(self, book_name: str, max_chapters: Optional[int] = None, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         def update_progress(progress: float, stage: str, message: str):
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
             if progress_callback:
@@ -35,6 +35,8 @@ class SummaryGenerationPipeline:
             # Загружаем текущие саммари из БД
             summary_archive = repo.get_summary_archive()
             db_chapters = repo.get_all_chapters()
+            if max_chapters and max_chapters > 0:
+                db_chapters = db_chapters[:max_chapters]
 
             if not db_chapters:
                 update_progress(1.0, "Ошибка", "В проекте не найдено глав.")

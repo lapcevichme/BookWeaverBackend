@@ -56,16 +56,17 @@ class Application:
                        skip_chars: bool = False,
                        skip_scenario: bool = False,
                        generate_images: bool = False,
+                       max_chapters: Optional[int] = None,
                        progress_callback: Optional[Callable] = None):
         """
-        Запускает последовательную генерацию: Саммари -> Персонажи -> Сценарии.
+        Запускает последовательную генерацию: Саммари -> Персонажи -> Сценарии (с опциональным лимитом глав max_chapters).
         """
         def update_progress(progress: float, stage: str, message: str):
             if progress_callback:
                 progress_callback(progress, stage, message)
             logger.info(f"[{stage}] {message}")
 
-        logger.info(f"Запуск полного цикла генерации для: {book_name}")
+        logger.info(f"Запуск генерации для '{book_name}' (max_chapters={max_chapters})")
         from core.book_repository import BookRepository
         from core import path_manager
         
@@ -83,12 +84,12 @@ class Application:
         if not skip_summary:
             current_stage_idx += 1
             update_progress((current_stage_idx - 1) / total_stages, "Summary", "Начало генерации пересказов...")
-            self.summary_pipeline.run(book_name, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
+            self.summary_pipeline.run(book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
 
         if not skip_chars:
             current_stage_idx += 1
             update_progress((current_stage_idx - 1) / total_stages, "Characters", "Начало анализа персонажей...")
-            self.character_pipeline.run(book_name, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
+            self.character_pipeline.run(book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
 
         if generate_images:
             current_stage_idx += 1
@@ -103,6 +104,9 @@ class Application:
             else:
                 chapter_ids = [(c.volume_num, c.chapter_num) for c in db_chapters]
             
+            if max_chapters and max_chapters > 0:
+                chapter_ids = chapter_ids[:max_chapters]
+
             total_chaps = len(chapter_ids)
 
             for i, (vol, chap) in enumerate(chapter_ids, 1):

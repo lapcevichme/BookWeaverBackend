@@ -39,7 +39,7 @@ class CharacterAnalysisPipeline:
             logger.error(f"❌ Ошибка загрузки черного списка из БД: {e}")
             self.GENERIC_ROLES_BLACKLIST = set()
 
-    def run(self, book_name: str, progress_callback: Optional[Callable[[float, str, str], None]] = None):
+    def run(self, book_name: str, max_chapters: Optional[int] = None, progress_callback: Optional[Callable[[float, str, str], None]] = None):
         def update_progress(progress: float, stage: str, message: str):
             logger.info(f"[Progress {progress:.0%}] [{stage}] {message}")
             if progress_callback:
@@ -51,6 +51,8 @@ class CharacterAnalysisPipeline:
         try:
             repo = BookRepository(book_name)
             db_chapters = repo.get_all_chapters()
+            if max_chapters and max_chapters > 0:
+                db_chapters = db_chapters[:max_chapters]
 
             if not db_chapters:
                 update_progress(1.0, "Ошибка", "В базе данных проекта не найдено глав.")
