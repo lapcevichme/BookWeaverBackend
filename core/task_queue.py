@@ -4,7 +4,7 @@ import time
 import json
 import uuid
 from typing import Dict, Any, Optional, Callable
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlmodel import SQLModel, Field, create_engine, Session, select
 import config
 
@@ -32,8 +32,8 @@ class TaskRecord(SQLModel, table=True):
     progress: float = Field(default=0.0)
     stage: str = Field(default="В очереди")
     message: str = Field(default="Задача поставлена в очередь.")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     kwargs_json: str = Field(default="{}")
 
     @property
@@ -96,7 +96,7 @@ class TaskWorker:
 
             # Mark as processing
             task.status = TaskStatus.PROCESSING
-            task.updated_at = datetime.utcnow()
+            task.updated_at = datetime.now(timezone.utc)
             session.add(task)
             session.commit()
             session.refresh(task)
@@ -134,7 +134,7 @@ class TaskWorker:
                     p_task.progress = p
                     p_task.stage = s
                     p_task.message = m
-                    p_task.updated_at = datetime.utcnow()
+                    p_task.updated_at = datetime.now(timezone.utc)
                     p_session.add(p_task)
                     p_session.commit()
 
@@ -155,7 +155,7 @@ class TaskWorker:
                         f_task.status = TaskStatus.COMPLETE
                         f_task.progress = 1.0
                         f_task.message = "Задача успешно завершена."
-                        f_task.updated_at = datetime.utcnow()
+                        f_task.updated_at = datetime.now(timezone.utc)
                         f_session.add(f_task)
                         f_session.commit()
                 logger.info(f"✅ Task {task.id} complete.")
@@ -166,7 +166,7 @@ class TaskWorker:
                     if f_task:
                         f_task.status = TaskStatus.CANCELLED
                         f_task.message = "Задача отменена пользователем."
-                        f_task.updated_at = datetime.utcnow()
+                        f_task.updated_at = datetime.now(timezone.utc)
                         f_session.add(f_task)
                         f_session.commit()
             except Exception as e:
@@ -176,7 +176,7 @@ class TaskWorker:
                     if f_task:
                         f_task.status = TaskStatus.FAILED
                         f_task.message = f"Error: {str(e)}"
-                        f_task.updated_at = datetime.utcnow()
+                        f_task.updated_at = datetime.now(timezone.utc)
                         f_session.add(f_task)
                         f_session.commit()
 

@@ -34,12 +34,12 @@ PRONUNCIATION_DICT_FILE = ASSETS_DIR / "pronunciation_dictionary.json"
 AMBIENT_LIBRARY_FILE = ASSETS_DIR / "ambient_library.json"
 EMOTION_REFERENCE_LIBRARY_FILE = ASSETS_DIR / "emotion_reference_library.json"
 SFX_LIBRARY_FILE = ASSETS_DIR / "sfx_library.json"
-COMFY_WORKFLOW_FAST = Path("workflow_fast.json")
-COMFY_WORKFLOW_HQ = Path("workflow_hq.json")
+COMFY_WORKFLOW_FAST = ASSETS_DIR / "workflow_fast.json"
+COMFY_WORKFLOW_HQ = ASSETS_DIR / "workflow_hq.json"
 VOICES_DIR = STORAGE_DIR / "voices"
 
 # Api (Deprecated)
-SERVER_PORT = int(os.environ.get("SERVER_PORT", 8080))
+SERVER_PORT = int(os.environ.get("SERVER_PORT", 8000))
 
 # LLM Settings Defaults
 _LLM_PROVIDER_DEFAULT = os.environ.get("LLM_PROVIDER", "google") # openrouter / google

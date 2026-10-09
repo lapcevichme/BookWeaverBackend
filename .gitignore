@@ -25,10 +25,11 @@ was_in_root/
 *.srt
 *.env
 *.log
+logs/
 output.txt
 .server_token
+web_ui/
 
-# 7. Стандартные файлы ОС и редакторов
 .DS_Store
 Thumbs.db
 .idea/
