@@ -129,12 +129,25 @@ class ScenarioGenerationPipeline:
                 
                 char_map = {char.name: char.id for char in contextual_characters.characters}
                 
+                from uuid import UUID
                 for i, entry_data in enumerate(emotion_enriched_scenario):
                     speaker_name = entry_data.get('speaker')
                     speaker_id = char_map.get(speaker_name)
+                    if isinstance(speaker_id, str):
+                        try:
+                            speaker_id = UUID(speaker_id)
+                        except Exception:
+                            speaker_id = None
                     
+                    entry_clean = {k: v for k, v in entry_data.items() if k not in ('speaker', 'speaker_id', 'speaker_name', 'chapter_id', 'order_index')}
+                    if 'id' in entry_clean and isinstance(entry_clean['id'], str):
+                        try:
+                            entry_clean['id'] = UUID(entry_clean['id'])
+                        except Exception:
+                            entry_clean.pop('id', None)
+
                     entry = ScenarioEntry(
-                        **entry_data,
+                        **entry_clean,
                         chapter_id=chapter_id,
                         speaker_id=speaker_id,
                         speaker_name=speaker_name,

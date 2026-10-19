@@ -220,14 +220,36 @@ class SoundDesignItem(SQLModel):
     sfx: Optional[str] = None
 
 class SoundDesignResult(SQLModel):
-    design: List[SoundDesignItem]
+    design: List[SoundDesignItem] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_list_or_dict(cls, data: Any):
+        if isinstance(data, list):
+            return {"design": data}
+        if isinstance(data, dict) and "design" not in data:
+            items = []
+            for k, v in data.items():
+                if isinstance(v, dict):
+                    items.append({"entry_id": k, **v})
+            if items:
+                return {"design": items}
+        return data
 
 class VoiceDirection(SQLModel):
     instruct: str = Field(...)
     tts_text: Optional[str] = None
 
 class EmotionMap(SQLModel):
-    emotions: Dict[UUID, VoiceDirection]
+    emotions: Dict[UUID, VoiceDirection] = Field(default_factory=dict)
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_dict(cls, data: Any):
+        if isinstance(data, dict):
+            if "emotions" not in data:
+                return {"emotions": data}
+        return data
 
 # Legacy Containers (Keep only definitions for type safety, remove logic)
 class ChapterSummaryArchive(SQLModel):
