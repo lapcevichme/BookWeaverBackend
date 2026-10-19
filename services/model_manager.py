@@ -35,6 +35,14 @@ class ModelManager:
             self._services[service_key] = TTSService()
         return self._services[service_key]
 
+    def get_embedding_service(self):
+        """Возвращает сервис эмбеддингов для векторизации и дедупликации."""
+        service_key = "embedding_service"
+        if service_key not in self._services:
+            from services.embedding_service import EmbeddingService
+            self._services[service_key] = EmbeddingService()
+        return self._services[service_key]
+
     def get_llm_service(self, service_type: str) -> LLMService:
         """Возвращает экземпляр LLMService."""
         provider = getattr(config, 'LLM_PROVIDER', 'google')

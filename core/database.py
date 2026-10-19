@@ -55,6 +55,13 @@ def init_book_db(book_path: Path):
                 logger.info(f"Migration: Adding storage_size_bytes column to {book_path.name}")
                 conn.execute(text("ALTER TABLE book ADD COLUMN storage_size_bytes INTEGER DEFAULT 0"))
                 conn.commit()
+
+            res_char = conn.execute(text("PRAGMA table_info(character)"))
+            char_columns = [row[1] for row in res_char]
+            if "embedding" not in char_columns:
+                logger.info(f"Migration: Adding embedding column to {book_path.name}")
+                conn.execute(text("ALTER TABLE character ADD COLUMN embedding JSON DEFAULT NULL"))
+                conn.commit()
     except Exception as e:
         import logging
         logging.getLogger(__name__).warning(f"Migration failed for {book_path.name}: {e}")

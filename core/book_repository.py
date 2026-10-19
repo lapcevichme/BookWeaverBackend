@@ -43,6 +43,62 @@ class BookRepository:
                 session.merge(char)
             session.commit()
 
+    def merge_characters(self, primary_id: Any, duplicate_id: Any) -> Optional[Character]:
+        """
+        Объединяет дубликат персонажа в основного персонажа:
+        - переносит все алиасы
+        - объединяет chapter_mentions
+        - переносит визуальные/голосовые таймлайны
+        - обновляет speaker_id во всех ScenarioEntry
+        - удаляет дубликат из БД
+        """
+        from uuid import UUID
+        pid = UUID(str(primary_id))
+        did = UUID(str(duplicate_id))
+        if pid == did:
+            return None
+
+        with self.get_session() as session:
+            primary = session.get(Character, pid)
+            duplicate = session.get(Character, did)
+            if not primary or not duplicate:
+                return primary
+
+            # Объединяем алиасы
+            combined_aliases = set(primary.aliases or [])
+            combined_aliases.add(duplicate.name)
+            for a in (duplicate.aliases or []):
+                combined_aliases.add(a)
+            primary.aliases = sorted(list(combined_aliases))
+
+            # Объединяем mentions
+            for chap_id, mention in (duplicate.chapter_mentions or {}).items():
+                if chap_id not in primary.chapter_mentions:
+                    primary.chapter_mentions[chap_id] = mention
+
+            # Объединяем visual/voice timelines
+            for chap_id, vt in (duplicate.visual_timeline or {}).items():
+                if chap_id not in primary.visual_timeline:
+                    primary.visual_timeline[chap_id] = vt
+
+            for chap_id, vt in (duplicate.voice_timeline or {}).items():
+                if chap_id not in primary.voice_timeline:
+                    primary.voice_timeline[chap_id] = vt
+
+            # Перепривязываем реплики в ScenarioEntry
+            from sqlmodel import select
+            entries = session.exec(select(ScenarioEntry).where(ScenarioEntry.speaker_id == did)).all()
+            for entry in entries:
+                entry.speaker_id = pid
+                entry.speaker_name = primary.name
+                session.add(entry)
+
+            session.delete(duplicate)
+            session.add(primary)
+            session.commit()
+            session.refresh(primary)
+            return primary
+
     def get_chapter_text(self, chapter_id: str) -> str:
         """Возвращает сырой текст главы из БД или из файла (с кэшированием в БД)."""
         db_chap = self.get_chapter(chapter_id)

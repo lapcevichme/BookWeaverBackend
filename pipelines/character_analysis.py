@@ -109,12 +109,13 @@ class CharacterAnalysisPipeline:
                 MAX_PER_CALL = 5
                 new_names = recon_result.newly_discovered_names
                 
-                # 1. Обработка НОВЫХ имен пачками
+                # 1. Обработка НОВЫХ имен пачками (с контекстом уже известных персонажей для дедупликации)
                 for i in range(0, len(new_names), MAX_PER_CALL):
                     chunk = new_names[i:i + MAX_PER_CALL]
                     update_progress(progress, stage, f"Глава {idx + 1}/{total_chapters}: Анализ новых ({i + len(chunk)}/{len(new_names)})...")
                     
-                    patch_list = self._perform_operation("[]", chunk, chapter_text, vol_num, chap_num)
+                    known_chars_json = self._build_known_chars_context(master_archive)
+                    patch_list = self._perform_operation(known_chars_json, chunk, chapter_text, vol_num, chap_num)
                     if patch_list and patch_list.patches:
                         master_archive = self._apply_patch(master_archive, patch_list, vol_num, chap_num, chapter_text, book_name)
 
@@ -170,19 +171,41 @@ class CharacterAnalysisPipeline:
         prompt = prompts.format_character_patch_prompt(relevant_chars_json, new_names, text, vol, chap)
         return powerful_llm.call_for_pydantic(CharacterPatchList, prompt, prompt_type="character_patch")
 
+    def _build_known_chars_context(self, archive: CharacterArchive) -> str:
+        """Формирует сжатый контекст существующих персонажей для передачи в LLM."""
+        if not archive.characters:
+            return "[]"
+        chars_summary = []
+        for c in archive.characters:
+            chars_summary.append({
+                "id": str(c.id),
+                "name": c.name,
+                "aliases": c.aliases,
+                "role_tier": c.role_tier,
+                "entity_type": c.entity_type.value if hasattr(c.entity_type, 'value') else str(c.entity_type),
+                "description": c.spoiler_free_description or (c.description[:150] if c.description else "")
+            })
+        return json.dumps(chars_summary, ensure_ascii=False)
+
     def _apply_patch(self, archive: CharacterArchive, patch_list: CharacterPatchList, vol: int, chap: int, chapter_text: str, book_id: str) -> CharacterArchive:
         chapter_id = f"vol_{vol}_chap_{chap}"
         role_weights = {"background": 0, "minor": 1, "major": 2, "protagonist": 3}
+        embedding_service = self.model_manager.get_embedding_service()
         
-        # Строим карты для быстрого поиска
+        # Строим карты для быстрого поиска по ID, точному имени и ВСЕМ алиасам
         char_map_id = {char.id: char for char in archive.characters}
         char_map_name = {char.name.lower(): char for char in archive.characters}
+        char_map_alias = {}
+        for char in archive.characters:
+            char_map_alias[char.name.lower()] = char
+            for a in (char.aliases or []):
+                char_map_alias[a.lower()] = char
 
         for patch in patch_list.patches:
             if patch.entity_type == CharacterType.OBJECT: continue
             if not patch.name: continue
 
-            # 1. Пытаемся найти персонажа (по ID или по Имени)
+            # 1. Пытаемся найти персонажа (по ID, по Имени или по Алиасам)
             target_char = None
             
             if patch.id and patch.id in char_map_id:
@@ -193,7 +216,42 @@ class CharacterAnalysisPipeline:
                 name_key = patch.name.lower()
                 if name_key in char_map_name:
                     target_char = char_map_name[name_key]
-                    logger.info(f"🔍 Нашли {patch.name} по имени (ID не совпал)")
+                    logger.info(f"🔍 Нашли {patch.name} по точному имени (ID не совпал)")
+                elif name_key in char_map_alias:
+                    target_char = char_map_alias[name_key]
+                    logger.info(f"🔍 Нашли {target_char.name} по существующему псевдониму '{patch.name}'")
+
+            # Проверяем пересечение алиасов патча с базой
+            if not target_char and patch.aliases:
+                for a in patch.aliases:
+                    a_key = a.lower()
+                    if a_key in char_map_alias:
+                        target_char = char_map_alias[a_key]
+                        logger.info(f"🔍 Нашли {target_char.name} через алиас '{a}' кандидата '{patch.name}'")
+                        break
+
+            # Векторное семантическое сопоставление (Entity Resolution via Embeddings)
+            if not target_char and archive.characters:
+                cand_text = f"{patch.name}. {patch.description or patch.spoiler_free_description or ''} {patch.current_chapter_action or ''}".strip()
+                cand_vec = embedding_service.get_embedding(cand_text)
+                if cand_vec:
+                    candidates_pool = []
+                    for c in archive.characters:
+                        if not c.embedding:
+                            c_text = f"{c.name}. {c.spoiler_free_description or c.description or ''}".strip()
+                            c.embedding = embedding_service.get_embedding(c_text)
+                        if c.embedding:
+                            # Сравниваем персонажей совместимого типа (животное с животным, человек с человеком)
+                            if not patch.entity_type or patch.entity_type == c.entity_type:
+                                candidates_pool.append((c, c.embedding))
+                    
+                    # Порог сходства: для животных 0.60, для людей 0.70
+                    sim_threshold = 0.60 if patch.entity_type == CharacterType.ANIMAL else 0.70
+                    match_res = embedding_service.find_most_similar(cand_vec, candidates_pool, threshold=sim_threshold)
+                    if match_res:
+                        matched_c, score = match_res
+                        logger.info(f"✨ Векторный дедупликатор: кандидат '{patch.name}' объединен с '{matched_c.name}' (сходство {score:.3f})")
+                        target_char = matched_c
 
             # 2. Если нашли - ОБНОВЛЯЕМ
             if target_char:
@@ -201,11 +259,23 @@ class CharacterAnalysisPipeline:
                 logger.info(f"🔄 ОБНОВЛЕНИЕ: {char.name}")
 
                 if patch.name and patch.name != char.name:
-                    if not self._is_dangerous_rename(char.name, patch.name):
+                    should_rename = False
+                    if self._is_role_name(char.name) and not self._is_role_name(patch.name):
+                        should_rename = True
+                    elif char.name.lower() in patch.name.lower() and len(patch.name) > len(char.name) and not self._is_dangerous_rename(char.name, patch.name):
+                        should_rename = True
+
+                    if should_rename:
                         logger.info(f"   - ИМЯ: {char.name} -> {patch.name}")
                         if char.name not in char.aliases and not self._is_role_name(char.name):
                             char.aliases.append(char.name)
                         char.name = patch.name
+                    else:
+                        if patch.name not in char.aliases and not self._is_role_name(patch.name):
+                            char.aliases.append(patch.name)
+                            logger.info(f"   - ДОБАВЛЕН АЛИАС: '{patch.name}' к '{char.name}'")
+                elif patch.name and patch.name not in char.aliases:
+                    char.aliases.append(patch.name)
 
                 if patch.entity_type: char.entity_type = patch.entity_type
                 if patch.aliases:
@@ -226,9 +296,16 @@ class CharacterAnalysisPipeline:
                 if patch.current_chapter_action:
                     char.chapter_mentions[chapter_id] = patch.current_chapter_action
 
+                # Обновляем вектор эмбеддинга персонажа
+                c_text = f"{char.name}. {char.spoiler_free_description or char.description or ''}".strip()
+                char.embedding = embedding_service.get_embedding(c_text)
+
             # 3. Если не нашли - СОЗДАЕМ
             elif not self._is_role_name(patch.name):
                 valid_aliases = [a for a in (patch.aliases or []) if not self._is_role_name(a)]
+                c_text = f"{patch.name}. {patch.description or patch.spoiler_free_description or 'Новый персонаж.'}".strip()
+                new_vec = embedding_service.get_embedding(c_text)
+                
                 new_char = Character(
                     id=uuid4(),
                     book_id=book_id,
@@ -241,7 +318,8 @@ class CharacterAnalysisPipeline:
                     chapter_mentions={chapter_id: patch.current_chapter_action} if patch.current_chapter_action else {},
                     gender=patch.gender,
                     visual_base=patch.visual_base or "",
-                    voice_base=patch.voice_base or ""
+                    voice_base=patch.voice_base or "",
+                    embedding=new_vec
                 )
                 if patch.timeline_voice_update:
                     new_char.voice_timeline[chapter_id] = patch.timeline_voice_update
@@ -251,6 +329,9 @@ class CharacterAnalysisPipeline:
                 archive.characters.append(new_char)
                 char_map_id[new_char.id] = new_char
                 char_map_name[new_char.name.lower()] = new_char
+                char_map_alias[new_char.name.lower()] = new_char
+                for a in new_char.aliases:
+                    char_map_alias[a.lower()] = new_char
                 logger.info(f"✨ НОВЫЙ: {patch.name} ({new_char.role_tier})")
 
         return archive

@@ -109,6 +109,7 @@ class Character(SQLModel, table=True):
     description: str = Field(..., sa_column=Column(Text))
     visual_base: Optional[str] = Field(None)
     voice_base: str = Field(default="")
+    embedding: Optional[List[float]] = Field(default=None, sa_column=Column(JSON))
     
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(JSON))
     visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict, sa_column=Column(JSON))
