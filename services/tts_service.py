@@ -95,7 +95,7 @@ class TTSService:
                 check=True,
                 capture_output=True
             )
-            segments = model.transcribe(str(tmp_wav_path))
+            segments = model.transcribe(str(tmp_wav_path), language="ru")
             if tmp_wav_path.exists():
                 tmp_wav_path.unlink()
                 

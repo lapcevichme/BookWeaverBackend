@@ -89,6 +89,14 @@ def health_check():
     }
 
 
+@app.post("/api/cache/clear")
+@app.get("/api/cache/clear")
+def clear_voice_cache():
+    voice_prompt_cache.clear()
+    logger.info("🧹 Voice prompt cache cleared.")
+    return {"status": "cleared"}
+
+
 @app.post("/api/tts")
 async def synthesize_speech(
     text: str = Form(...),
