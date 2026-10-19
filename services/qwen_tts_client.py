@@ -49,9 +49,11 @@ class QwenTTSClient:
             speed: Скорость воспроизведения.
             mode: Режим клонирования (совместимость).
         """
-        if prompt_wav_path and not prompt_wav_path.exists():
-            logger.error(f"Референс голоса не найден: {prompt_wav_path}")
-            return None
+        if prompt_wav_path:
+            prompt_wav_path = Path(prompt_wav_path)
+            if not prompt_wav_path.exists():
+                logger.error(f"Референс голоса не найден: {prompt_wav_path}")
+                return None
 
         files = {}
         opened_file = None

@@ -14,8 +14,9 @@ from fastapi.responses import Response
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("qwen3-tts-server")
 
-MODEL_ID = os.getenv("QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-1.7B-Base")
 DEVICE = os.getenv("DEVICE", "cuda:0" if torch.cuda.is_available() else "cpu")
+DEFAULT_MODEL = "Qwen/Qwen3-TTS-12Hz-0.6B-Base" if "cpu" in DEVICE else "Qwen/Qwen3-TTS-12Hz-1.7B-Base"
+MODEL_ID = os.getenv("QWEN_TTS_MODEL", DEFAULT_MODEL)
 DEFAULT_LANGUAGE = os.getenv("DEFAULT_LANGUAGE", "Russian")
 
 # Auto-detect precision
@@ -45,13 +46,15 @@ def load_model():
             "device_map": DEVICE,
             "dtype": DTYPE,
         }
-        try:
-            # Enable flash-attn if available
-            load_kwargs["attn_implementation"] = "flash_attention_2"
-            model = Qwen3TTSModel.from_pretrained(MODEL_ID, **load_kwargs)
-        except Exception as e:
-            logger.warning(f"FlashAttention 2 not available ({e}), falling back to default attention.")
-            load_kwargs.pop("attn_implementation", None)
+        if "cuda" in DEVICE:
+            try:
+                load_kwargs["attn_implementation"] = "flash_attention_2"
+                model = Qwen3TTSModel.from_pretrained(MODEL_ID, **load_kwargs)
+            except Exception as e:
+                logger.warning(f"FlashAttention 2 not available ({e}), falling back to default attention.")
+                load_kwargs.pop("attn_implementation", None)
+                model = Qwen3TTSModel.from_pretrained(MODEL_ID, **load_kwargs)
+        else:
             model = Qwen3TTSModel.from_pretrained(MODEL_ID, **load_kwargs)
             
         logger.info(f"✅ Qwen3-TTS model successfully loaded on {DEVICE}!")
