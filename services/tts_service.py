@@ -63,7 +63,10 @@ class TTSService:
         if path_str in self._reference_transcription_cache:
             return self._reference_transcription_cache[path_str]
 
-        txt_path = speaker_wav_path.with_suffix(speaker_wav_path.suffix + ".txt")
+        # Сначала проверяем reference.txt, затем reference.wav.txt
+        txt_path = speaker_wav_path.with_suffix(".txt")
+        if not txt_path.exists():
+            txt_path = speaker_wav_path.with_suffix(speaker_wav_path.suffix + ".txt")
 
         if txt_path.exists() and txt_path.is_file():
             try:
@@ -80,7 +83,22 @@ class TTSService:
 
         try:
             logger.info(f"Транскрипция референса через C++ Whisper (pywhispercpp): {speaker_wav_path.name}")
-            segments = model.transcribe(path_str)
+            import subprocess
+            import tempfile
+            
+            # Whisper требует 16kHz mono WAV
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                tmp_wav_path = Path(tmp_wav.name)
+            
+            subprocess.run(
+                ["ffmpeg", "-y", "-i", path_str, "-ar", "16000", "-ac", "1", "-c:a", "pcm_s16le", str(tmp_wav_path)],
+                check=True,
+                capture_output=True
+            )
+            segments = model.transcribe(str(tmp_wav_path))
+            if tmp_wav_path.exists():
+                tmp_wav_path.unlink()
+                
             text = " ".join([s.text for s in segments]).strip()
 
             try:

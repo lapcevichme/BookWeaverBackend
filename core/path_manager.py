@@ -21,14 +21,16 @@ def get_cover_path(book_name: str) -> Path:
 def get_voice_path(voice_id: str) -> Path:
     """Ищет референс голоса по ID в системных папках."""
     # 1. Проверка в папке отобранных референсов
-    ref_path = config.SELECTED_VOICES_DIR / f"{voice_id}.wav"
-    if ref_path.exists():
-        return ref_path
+    for ext in [".wav", ".mp3", ".ogg", ".flac"]:
+        ref_path = config.SELECTED_VOICES_DIR / f"{voice_id}{ext}"
+        if ref_path.exists():
+            return ref_path
     
     # 2. Проверка в общей папке голосов
-    ref_path = config.VOICES_DIR / voice_id / "reference.wav"
-    if ref_path.exists():
-        return ref_path
+    for ext in [".wav", ".mp3", ".ogg", ".flac"]:
+        ref_path = config.VOICES_DIR / voice_id / f"reference{ext}"
+        if ref_path.exists():
+            return ref_path
         
     # Возвращаем путь по умолчанию (даже если не существует, для логики pipelines)
     return config.SELECTED_VOICES_DIR / f"{voice_id}.wav"
