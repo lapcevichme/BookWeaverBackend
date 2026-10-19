@@ -64,7 +64,8 @@ COMFY_NODE_MAPPING = {
 }
 
 # TTS Defaults
-_COSYVOICE_API_URL_DEFAULT = os.environ.get("COSYVOICE_API_URL", "http://localhost:9233")
+_TTS_API_URL_DEFAULT = os.environ.get("TTS_API_URL") or os.environ.get("COSYVOICE_API_URL", "http://localhost:9233")
+_COSYVOICE_API_URL_DEFAULT = _TTS_API_URL_DEFAULT
 
 # Ranobelib Defaults
 RANOBELIB_API_BASE_URL = "https://api.cdnlibs.org/api"
@@ -129,8 +130,11 @@ def __getattr__(name: str):
         return float(_get_db_setting("summary_temp", _SUMMARY_LLM_TEMPERATURE_DEFAULT))
     elif name == "COMFY_SERVER_ADDRESS":
         return _get_db_setting("comfy_server_address", _COMFY_SERVER_ADDRESS_DEFAULT)
-    elif name == "COSYVOICE_API_URL":
-        return _get_db_setting("cosyvoice_url", _COSYVOICE_API_URL_DEFAULT)
+    elif name in ("TTS_API_URL", "COSYVOICE_API_URL"):
+        db_val = _get_db_setting("tts_url", None)
+        if db_val is None:
+            db_val = _get_db_setting("cosyvoice_url", _TTS_API_URL_DEFAULT)
+        return db_val
     elif name == "ELEVENLABS_API_KEY":
         return _get_db_setting("elevenlabs_key", _ELEVENLABS_API_KEY_DEFAULT)
     elif name == "GOOGLE_API_KEY":

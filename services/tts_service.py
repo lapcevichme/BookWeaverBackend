@@ -2,25 +2,28 @@ import logging
 from pathlib import Path
 from threading import Lock
 import config
-from services.cosyvoice_client import CosyVoiceClient
+from services.qwen_tts_client import QwenTTSClient
 
 logger = logging.getLogger(__name__)
 
 
 class TTSService:
     """
-    Сервис для TTS (CosyVoice API) и C++ Whisper (pywhispercpp Aligner & Transcriber).
+    Сервис для TTS (Qwen3-TTS API) и C++ Whisper (pywhispercpp Aligner & Transcriber).
     Не требует PyTorch в основном бэкенд-процессе.
     """
 
     def __init__(self):
-        self.cosy_client = CosyVoiceClient(base_url=config.COSYVOICE_API_URL)
+        tts_url = getattr(config, "TTS_API_URL", getattr(config, "COSYVOICE_API_URL", "http://localhost:9233"))
+        self.tts_client = QwenTTSClient(base_url=tts_url)
+        # Обратная совместимость
+        self.cosy_client = self.tts_client
 
         self._whisper_model = None
         self._whisper_load_lock = Lock()
         self._reference_transcription_cache = {}
 
-        logger.info(f"Сервис TTSService инициализирован. CosyVoice URL: {config.COSYVOICE_API_URL}")
+        logger.info(f"Сервис TTSService инициализирован. Qwen3-TTS URL: {tts_url}")
 
     @property
     def whisper_model(self):
@@ -92,19 +95,22 @@ class TTSService:
             return " "
 
     def synthesize(self, text: str, speaker_wav_path: Path, emotion: str = None) -> bytes | None:
-        """Синтез речи через API CosyVoice."""
+        """Синтез речи через API Qwen3-TTS."""
         if not speaker_wav_path.exists():
             logger.error(f"Файл-образец голоса не найден: {speaker_wav_path}")
             return None
 
         prompt_text = self._get_prompt_text(speaker_wav_path)
         instruct_text = emotion if emotion and emotion.lower() != "neutral" else ""
+        voice_id = speaker_wav_path.parent.name if speaker_wav_path.parent.name != "voices" else speaker_wav_path.stem
 
-        return self.cosy_client.synthesize(
+        return self.tts_client.synthesize(
             text=text,
             prompt_wav_path=speaker_wav_path,
             prompt_text=prompt_text,
             instruct_text=instruct_text,
+            voice_id=voice_id,
+            language="Russian",
             mode="zero_shot"
         )
 
