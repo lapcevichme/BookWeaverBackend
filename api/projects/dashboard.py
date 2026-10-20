@@ -2,6 +2,7 @@ import logging
 from typing import List
 from fastapi import APIRouter
 from sqlmodel import select
+from sqlalchemy import func
 
 import config
 from core.book_repository import BookRepository
@@ -46,31 +47,26 @@ async def get_dashboard_summary():
                 "total_chapters": total
             })
 
-    # 3. Общие метрики из баз данных всех книг
+    # 3. Общие метрики и дисковое пространство из баз данных всех книг
     total_tokens = 0
     total_audio_sec = 0
+    total_bytes = 0
     for d in all_projects:
         repo = BookRepository(book_id=d.name)
         try:
             with repo.get_session() as session:
-                from core.data_models import LLMMetric, AudioMetric
-                llms = session.exec(select(LLMMetric)).all()
-                total_tokens += sum(m.input_tokens + m.output_tokens for m in llms)
-                audios = session.exec(select(AudioMetric)).all()
-                total_audio_sec += sum(a.audio_duration_ms for a in audios) / 1000
+                from core.data_models import LLMMetric, AudioMetric, Book
+                tokens = session.exec(select(func.sum(LLMMetric.input_tokens + LLMMetric.output_tokens))).first() or 0
+                total_tokens += tokens
+                audio_ms = session.exec(select(func.sum(AudioMetric.audio_duration_ms))).first() or 0
+                total_audio_sec += audio_ms / 1000
+                book = session.get(Book, d.name)
+                if book and book.storage_size_bytes:
+                    total_bytes += book.storage_size_bytes
         except Exception as e:
             logger.warning(f"Failed to read metrics from {d.name} DB: {e}")
 
     total_audio_min = round(total_audio_sec / 60, 1)
-
-    # 4. РЕАЛЬНОЕ место на диске (из кэша в БД)
-    total_bytes = 0
-    for d in all_projects:
-        repo = BookRepository(book_id=d.name)
-        book = repo.get_book()
-        if book:
-            total_bytes += book.storage_size_bytes
-
     storage_gb = round(total_bytes / (1024**3), 2)
 
     # 5. Статус сервисов

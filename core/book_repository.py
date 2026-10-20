@@ -25,8 +25,14 @@ class BookRepository:
             return session.get(Chapter, chapter_id)
 
     def get_all_chapters(self) -> List[Chapter]:
+        from sqlalchemy.orm import defer
         with self.get_session() as session:
-            return session.exec(select(Chapter).where(Chapter.book_id == self.book_id).order_by(Chapter.order_index)).all()
+            return session.exec(
+                select(Chapter)
+                .where(Chapter.book_id == self.book_id)
+                .options(defer(Chapter.raw_text))
+                .order_by(Chapter.order_index)
+            ).all()
 
     def update_chapter_status(self, chapter_id: str, status: str):
         with self.get_session() as session:

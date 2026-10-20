@@ -41,23 +41,21 @@ async def get_project_details(book_name: str):
     if not book:
         raise HTTPException(status_code=404, detail="Книга или база данных проекта не найдены.")
 
-    with repo.get_session() as session:
-        statement = select(Chapter).where(Chapter.book_id == book_name).order_by(Chapter.order_index)
-        chapters = session.exec(statement).all()
+    chapters = repo.get_all_chapters()
 
-        chapters_status = []
-        for chap in chapters:
-            audio_dir = path_manager.get_chapter_audio_dir(book_name, chap.id)
-            has_audio = audio_dir.exists() and any(audio_dir.iterdir())
+    chapters_status = []
+    for chap in chapters:
+        audio_dir = path_manager.get_chapter_audio_dir(book_name, chap.id)
+        has_audio = audio_dir.exists() and any(audio_dir.iterdir())
 
-            chapters_status.append({
-                "volume_num": chap.volume_num,
-                "chapter_num": chap.chapter_num,
-                "id": chap.id,
-                "title": chap.title,
-                "status": chap.status,
-                "has_audio": has_audio
-            })
+        chapters_status.append({
+            "volume_num": chap.volume_num,
+            "chapter_num": chap.chapter_num,
+            "id": chap.id,
+            "title": chap.title,
+            "status": chap.status,
+            "has_audio": has_audio
+        })
 
         return {
             "book_id": book.id,
