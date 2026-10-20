@@ -147,6 +147,7 @@ async def get_global_metrics():
     from core.book_repository import BookRepository
     from core.data_models import LLMMetric, AudioMetric, MetricCounter
     from sqlmodel import select
+    from sqlalchemy import func
 
     output_dir = config.OUTPUT_DIR
     if not output_dir.exists():
@@ -170,35 +171,62 @@ async def get_global_metrics():
             db_chapters = repo.get_all_chapters()
             
             with repo.get_session() as session:
-                llm_calls = session.exec(select(LLMMetric)).all()
-                audio_calls = session.exec(select(AudioMetric)).all()
+                llm_stmt = (
+                    select(
+                        LLMMetric.chapter_id,
+                        func.count(LLMMetric.id),
+                        func.sum(LLMMetric.input_tokens + LLMMetric.output_tokens)
+                    )
+                    .group_by(LLMMetric.chapter_id)
+                )
+                llm_stats = {
+                    row[0]: {"calls": row[1], "tokens": row[2] or 0}
+                    for row in session.exec(llm_stmt).all()
+                }
+
+                audio_stmt = (
+                    select(
+                        AudioMetric.chapter_id,
+                        func.count(AudioMetric.id),
+                        func.sum(AudioMetric.audio_duration_ms),
+                        func.avg(AudioMetric.rtf),
+                        func.avg(AudioMetric.cer)
+                    )
+                    .group_by(AudioMetric.chapter_id)
+                )
+                audio_stats = {
+                    row[0]: {
+                        "units": row[1],
+                        "duration_ms": row[2] or 0,
+                        "avg_rtf": row[3] or 0.0,
+                        "avg_cer": row[4] or 0.0
+                    }
+                    for row in session.exec(audio_stmt).all()
+                }
+
                 counters = session.exec(select(MetricCounter)).all()
-                
+                counter_map = {}
+                for c in counters:
+                    if c.chapter_id not in counter_map:
+                        counter_map[c.chapter_id] = {}
+                    counter_map[c.chapter_id][c.counter_name] = c.value
+                    if c.counter_name in global_counters:
+                        global_counters[c.counter_name] += c.value
+
                 for chap in db_chapters:
-                    chap_llm = [m for m in llm_calls if m.chapter_id == chap.id]
-                    chap_audio = [m for m in audio_calls if m.chapter_id == chap.id]
-                    chap_counters = [m for m in counters if m.chapter_id == chap.id]
-                    
-                    chap_errs = {c.counter_name: c.value for c in chap_counters}
-                    
-                    for c in chap_counters:
-                        name = c.counter_name
-                        if name in global_counters:
-                            global_counters[name] += c.value
-                    
-                    avg_rtf = sum(a.rtf for a in chap_audio) / len(chap_audio) if chap_audio else 0
-                    total_audio_sec = sum(a.audio_duration_ms for a in chap_audio) / 1000
-                    chap_tokens = sum(m.input_tokens + m.output_tokens for m in chap_llm)
-                    
+                    llm_info = llm_stats.get(chap.id, {"calls": 0, "tokens": 0})
+                    audio_info = audio_stats.get(chap.id, {"units": 0, "duration_ms": 0, "avg_rtf": 0.0, "avg_cer": 0.0})
+                    chap_errs = counter_map.get(chap.id, {})
+
                     global_id = f"{book_name}:{chap.id}"
                     all_summaries[global_id] = {
                         "chapter_id": global_id,
-                        "llm_calls": len(chap_llm),
-                        "total_tokens": chap_tokens,
-                        "audio_units": len(chap_audio),
-                        "total_audio_duration_sec": round(total_audio_sec, 2),
-                        "avg_rtf": round(avg_rtf, 3),
-                        "avg_cer": round(sum(a.cer for a in chap_audio) / len(chap_audio), 4) if chap_audio else 0,
+                        "llm_calls": llm_info["calls"],
+                        "total_tokens": llm_info["tokens"],
+                        "audio_units": audio_info["units"],
+                        "total_audio_duration_sec": round(audio_info["duration_ms"] / 1000, 2),
+                        "avg_rtf": round(audio_info["avg_rtf"], 3),
+                        "avg_cer": round(audio_info["avg_cer"], 4),
                         "errors": chap_errs
                     }
     except Exception as e:
@@ -275,5 +303,6 @@ async def update_settings(new_settings: dict):
             setting.value = v
             session.add(setting)
         session.commit()
-        
+
+    config.invalidate_settings_cache()
     return {"message": "Настройки успешно сохранены."}

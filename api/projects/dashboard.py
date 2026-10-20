@@ -7,6 +7,7 @@ from sqlalchemy import func
 import config
 from core.book_repository import BookRepository
 from core import path_manager
+from core.data_models import ChapterStatus
 from api.models import DashboardSummaryResponse, DashboardRecentProject, DashboardSystemStatus
 
 logger = logging.getLogger(__name__)
@@ -37,9 +38,12 @@ async def get_dashboard_summary():
             total = len(chapters)
             ready = 0
             for chap in chapters:
-                audio_dir = path_manager.get_chapter_audio_dir(d.name, chap.id)
-                if audio_dir.exists() and any(audio_dir.iterdir()):
+                if chap.status in (ChapterStatus.AUDIO_READY, ChapterStatus.COMPLETED):
                     ready += 1
+                else:
+                    audio_dir = path_manager.get_chapter_audio_dir(d.name, chap.id)
+                    if audio_dir.exists() and any(audio_dir.iterdir()):
+                        ready += 1
             recent_projects.append({
                 "id": d.name,
                 "title": book.title,

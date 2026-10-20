@@ -76,9 +76,9 @@ class TTSPipeline:
                 if not scenario_entries:
                     raise FileNotFoundError(f"Записи сценария не найдены в БД для главы {chapter_id}.")
 
-                manifest = repo.load_manifest()
-                chars = repo.get_characters()
-                char_name_to_id_map = {char.name: char.id for char in chars}
+            manifest = repo.load_manifest()
+            chars = repo.get_characters()
+            char_name_to_id_map = {char.name: char.id for char in chars}
 
             update_progress(0.1, stage, "Все данные успешно загружены.")
 

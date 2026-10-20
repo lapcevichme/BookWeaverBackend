@@ -32,58 +32,84 @@ async def get_project_metrics(book_name: str):
 
     try:
         with repo.get_session() as session:
-            llm_calls = session.exec(select(LLMMetric)).all()
-            audio_calls = session.exec(select(AudioMetric)).all()
+            llm_stmt = (
+                select(
+                    LLMMetric.chapter_id,
+                    func.count(LLMMetric.id),
+                    func.sum(LLMMetric.input_tokens + LLMMetric.output_tokens)
+                )
+                .group_by(LLMMetric.chapter_id)
+            )
+            llm_stats = {
+                row[0]: {"calls": row[1], "tokens": row[2] or 0}
+                for row in session.exec(llm_stmt).all()
+            }
+
+            audio_stmt = (
+                select(
+                    AudioMetric.chapter_id,
+                    func.count(AudioMetric.id),
+                    func.sum(AudioMetric.audio_duration_ms),
+                    func.avg(AudioMetric.rtf),
+                    func.avg(AudioMetric.cer)
+                )
+                .group_by(AudioMetric.chapter_id)
+            )
+            audio_stats = {
+                row[0]: {
+                    "units": row[1],
+                    "duration_ms": row[2] or 0,
+                    "avg_rtf": row[3] or 0.0,
+                    "avg_cer": row[4] or 0.0
+                }
+                for row in session.exec(audio_stmt).all()
+            }
+
             counters = session.exec(select(MetricCounter)).all()
+            counter_map = {}
+            for c in counters:
+                if c.chapter_id not in counter_map:
+                    counter_map[c.chapter_id] = {}
+                counter_map[c.chapter_id][c.counter_name] = c.value
+                if c.counter_name in book_counters:
+                    book_counters[c.counter_name] += c.value
 
             for chap in db_chapters:
-                chap_llm = [m for m in llm_calls if m.chapter_id == chap.id]
-                chap_audio = [m for m in audio_calls if m.chapter_id == chap.id]
-                chap_counters = [m for m in counters if m.chapter_id == chap.id]
+                llm_info = llm_stats.get(chap.id, {"calls": 0, "tokens": 0})
+                audio_info = audio_stats.get(chap.id, {"units": 0, "duration_ms": 0, "avg_rtf": 0.0, "avg_cer": 0.0})
+                chap_errs = counter_map.get(chap.id, {})
 
-                chap_errs = {c.counter_name: c.value for c in chap_counters}
-
-                for c in chap_counters:
-                    if c.counter_name in book_counters:
-                        book_counters[c.counter_name] += c.value
-
-                avg_rtf = sum(a.rtf for a in chap_audio) / len(chap_audio) if chap_audio else 0
-                total_audio_sec = sum(a.audio_duration_ms for a in chap_audio) / 1000
-                chap_tokens = sum(m.input_tokens + m.output_tokens for m in chap_llm)
-                total_tokens += chap_tokens
+                total_tokens += llm_info["tokens"]
 
                 book_chapters_data.append({
                     "chapter_id": chap.id,
-                    "llm_calls": len(chap_llm),
-                    "total_tokens": chap_tokens,
-                    "audio_units": len(chap_audio),
-                    "total_audio_duration_sec": round(total_audio_sec, 2),
-                    "avg_rtf": round(avg_rtf, 3),
-                    "avg_cer": round(sum(a.cer for a in chap_audio) / len(chap_audio), 4) if chap_audio else 0,
+                    "llm_calls": llm_info["calls"],
+                    "total_tokens": llm_info["tokens"],
+                    "audio_units": audio_info["units"],
+                    "total_audio_duration_sec": round(audio_info["duration_ms"] / 1000, 2),
+                    "avg_rtf": round(audio_info["avg_rtf"], 3),
+                    "avg_cer": round(audio_info["avg_cer"], 4),
                     "errors": chap_errs
                 })
-    except Exception as e:
-        logger.error(f"Error querying metrics from DB for project {book_name}: {e}")
-        return {"chapters": [], "total_tokens": 0, "counters": {}}
 
-    character_activity = {}
-    try:
-        with repo.get_session() as session:
-            query = session.query(
-                ScenarioEntry.chapter_id,
-                ScenarioEntry.speaker_id,
-                func.count(ScenarioEntry.id)
-            ).filter(ScenarioEntry.speaker_id != None).group_by(
-                ScenarioEntry.chapter_id, ScenarioEntry.speaker_id
+            # Активность персонажей в рамках той же сессии
+            act_statement = (
+                select(
+                    ScenarioEntry.chapter_id,
+                    ScenarioEntry.speaker_id,
+                    func.count(ScenarioEntry.id)
+                )
+                .where(ScenarioEntry.speaker_id.is_not(None))
+                .group_by(ScenarioEntry.chapter_id, ScenarioEntry.speaker_id)
             )
-
-            for chap_id, char_id, count in query.all():
+            for chap_id, char_id, count in session.exec(act_statement).all():
                 char_id_str = str(char_id)
                 if char_id_str not in character_activity:
                     character_activity[char_id_str] = {}
                 character_activity[char_id_str][chap_id] = count
     except Exception as e:
-        logger.warning(f"Error calculating character activity for project {book_name}: {e}")
+        logger.error(f"Error querying metrics from DB for project {book_name}: {e}")
+        return {"chapters": [], "total_tokens": 0, "counters": {}}
 
     return {
         "book_id": book_name,

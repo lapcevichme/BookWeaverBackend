@@ -63,12 +63,12 @@ async def delete_character(book_name: str, char_id: UUID):
 async def get_character_portrait(book_name: str, char_id: UUID):
     """Возвращает файл портрета персонажа."""
     repo = BookRepository(book_id=book_name)
+    img_path = None
     with repo.get_session() as session:
         char = session.get(Character, char_id)
         if not char:
             raise HTTPException(status_code=404, detail="Персонаж не найден.")
 
-        img_path = None
         if char.visual_timeline:
             if "global" in char.visual_timeline and char.visual_timeline["global"].reference_image_path:
                 img_path = char.visual_timeline["global"].reference_image_path
@@ -78,21 +78,21 @@ async def get_character_portrait(book_name: str, char_id: UUID):
                         img_path = state.reference_image_path
                         break
 
-        if not img_path:
-            images_dir = path_manager.get_book_output_dir(book_name) / "images"
-            if images_dir.exists():
-                for f in images_dir.iterdir():
-                    if f.name.startswith(str(char_id)) and f.suffix.lower() in ['.png', '.jpg', '.jpeg']:
-                        img_path = f
-                        break
+    if not img_path:
+        images_dir = path_manager.get_book_output_dir(book_name) / "images"
+        if images_dir.exists():
+            for f in images_dir.iterdir():
+                if f.name.startswith(str(char_id)) and f.suffix.lower() in ['.png', '.jpg', '.jpeg']:
+                    img_path = f
+                    break
 
-        if not img_path:
-            raise HTTPException(status_code=404, detail="Портрет персонажа не найден.")
+    if not img_path:
+        raise HTTPException(status_code=404, detail="Портрет персонажа не найден.")
 
-        path = Path(img_path)
-        if not path.is_absolute():
-            path = path_manager.get_book_output_dir(book_name) / path
+    path = Path(img_path)
+    if not path.is_absolute():
+        path = path_manager.get_book_output_dir(book_name) / path
 
-        if not path.exists():
-            raise HTTPException(status_code=404, detail="Файл портрета не найден.")
-        return FileResponse(path)
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл портрета не найден.")
+    return FileResponse(path)

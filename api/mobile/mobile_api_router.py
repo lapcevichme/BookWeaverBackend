@@ -217,9 +217,16 @@ async def get_book_characters(bookId: str):
                 dependencies=[Depends(verify_token)])
 async def get_character_details(bookId: str, characterId: str):
     try:
+        from uuid import UUID
+        from core.data_models import Character
+        try:
+            char_uuid = UUID(characterId)
+        except ValueError:
+            raise HTTPException(status_code=404, detail="Некорректный ID персонажа.")
+
         repo = BookRepository(book_id=bookId)
-        db_chars = repo.get_characters()
-        target_char = next((c for c in db_chars if str(c.id) == characterId), None)
+        with repo.get_session() as session:
+            target_char = session.get(Character, char_uuid)
 
         if not target_char:
             raise HTTPException(status_code=404, detail="Персонаж не найден.")
