@@ -38,17 +38,29 @@ def get_engine_for_book(book_path: Path):
         json_serializer=pydantic_json_serializer # <--- Вот она, магия
     )
 
+def get_book_tables():
+    from core import data_models
+    return [
+        data_models.Book.__table__,
+        data_models.Chapter.__table__,
+        data_models.ChapterCache.__table__,
+        data_models.ChapterSummary.__table__,
+        data_models.Character.__table__,
+        data_models.ScenarioEntry.__table__,
+        data_models.LLMMetric.__table__,
+        data_models.AudioMetric.__table__,
+        data_models.MetricCounter.__table__,
+    ]
+
 def init_book_db(book_path: Path):
     """Инициализирует таблицы и применяет миграции для конкретной книги."""
-    from core import data_models
     engine = get_engine_for_book(book_path)
-    SQLModel.metadata.create_all(engine)
+    SQLModel.metadata.create_all(engine, tables=get_book_tables())
     
-    # Simple migration: add storage_size_bytes if missing
     try:
         with engine.connect() as conn:
             from sqlalchemy import text
-            # SQLite check for column existence
+            # 1. Проверяем колонку storage_size_bytes в book
             res = conn.execute(text("PRAGMA table_info(book)"))
             columns = [row[1] for row in res]
             if "storage_size_bytes" not in columns:
@@ -56,15 +68,52 @@ def init_book_db(book_path: Path):
                 conn.execute(text("ALTER TABLE book ADD COLUMN storage_size_bytes INTEGER DEFAULT 0"))
                 conn.commit()
 
+            # 2. Проверяем колонку embedding в character
             res_char = conn.execute(text("PRAGMA table_info(character)"))
             char_columns = [row[1] for row in res_char]
             if "embedding" not in char_columns:
                 logger.info(f"Migration: Adding embedding column to {book_path.name}")
                 conn.execute(text("ALTER TABLE character ADD COLUMN embedding JSON DEFAULT NULL"))
                 conn.commit()
+
+            # 3. Миграция тяжелых кэшей из chapter в chaptercache
+            res_chap = conn.execute(text("PRAGMA table_info(chapter)"))
+            chap_columns = [row[1] for row in res_chap]
+            old_cache_cols = [c for c in ["cache_raw_scenario", "cache_ambient", "cache_emotion"] if c in chap_columns]
+            if old_cache_cols:
+                logger.info(f"Migration: Moving chapter caches to chaptercache table in {book_path.name}")
+                raw_col = 'cache_raw_scenario' if 'cache_raw_scenario' in chap_columns else 'NULL'
+                amb_col = 'cache_ambient' if 'cache_ambient' in chap_columns else 'NULL'
+                emo_col = 'cache_emotion' if 'cache_emotion' in chap_columns else 'NULL'
+                
+                conn.execute(text(f"""
+                    INSERT OR IGNORE INTO chaptercache (chapter_id, raw_scenario, ambient, emotion)
+                    SELECT id, {raw_col}, {amb_col}, {emo_col}
+                    FROM chapter
+                    WHERE {raw_col} IS NOT NULL OR {amb_col} IS NOT NULL OR {emo_col} IS NOT NULL
+                """))
+                
+                for col in old_cache_cols:
+                    conn.execute(text(f"ALTER TABLE chapter DROP COLUMN {col}"))
+                conn.commit()
+
+            # 4. Создание недостающих индексов
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_scenarioentry_chapter_order ON scenarioentry (chapter_id, order_index)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_scenarioentry_speaker_id ON scenarioentry (speaker_id)"))
+            conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS uq_metriccounter_chapter_counter ON metriccounter (chapter_id, counter_name)"))
+            conn.commit()
+
+            # 5. Очистка пустых призрачных таблиц от общей метадаты SQLModel
+            ghost_tables = ["taskrecord", "ambienttrack", "sfxtrack", "pronunciationentry", "systemsetting"]
+            for gt in ghost_tables:
+                tbl_check = conn.execute(text(f"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{gt}'")).scalar()
+                if tbl_check:
+                    cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
+                    if cnt == 0:
+                        conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.commit()
     except Exception as e:
-        import logging
-        logging.getLogger(__name__).warning(f"Migration failed for {book_path.name}: {e}")
+        logger.warning(f"Migration/cleanup failed for {book_path.name}: {e}")
         
     return engine
 
@@ -79,10 +128,38 @@ def get_system_engine():
     db_path = config.OUTPUT_DIR / "system.db"
     return create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
 
-def init_system_db():
+def get_system_tables():
     from core import system_models
+    return [
+        system_models.AmbientTrack.__table__,
+        system_models.SFXTrack.__table__,
+        system_models.PronunciationEntry.__table__,
+        system_models.SystemSetting.__table__,
+    ]
+
+def init_system_db():
     engine = get_system_engine()
-    SQLModel.metadata.create_all(engine)
+    SQLModel.metadata.create_all(engine, tables=get_system_tables())
+    
+    # Очистка пустых таблиц, не относящихся к системной БД
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            ghost_tables = [
+                "book", "chapter", "chaptercache", "character", 
+                "chaptersummary", "scenarioentry", "llmmetric", 
+                "audiometric", "metriccounter", "taskrecord"
+            ]
+            for gt in ghost_tables:
+                tbl_check = conn.execute(text(f"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{gt}'")).scalar()
+                if tbl_check:
+                    cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
+                    if cnt == 0:
+                        conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to clean ghost tables in system.db: {e}")
+        
     return engine
 
 def get_system_session() -> Session:

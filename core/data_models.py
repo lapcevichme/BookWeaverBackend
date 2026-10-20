@@ -10,10 +10,23 @@ from enum import Enum
 
 from pydantic import model_validator, ValidationError, BaseModel as PydanticBaseModel, ConfigDict
 from sqlmodel import SQLModel, Field, Relationship, Column, JSON
-from sqlalchemy import Text
+from sqlalchemy import Text, Index, UniqueConstraint, ForeignKey, String
 from sqlalchemy.orm import reconstructor
 
 # --- Enums ---
+
+class ChapterStatus(str, Enum):
+    DRAFT = "draft"
+    PROCESSING = "processing"
+    SCENARIO_READY = "scenario_ready"
+    TTS_READY = "tts_ready"
+    COMPLETED = "completed"
+
+class ScenarioEntryType(str, Enum):
+    DIALOGUE = "dialogue"
+    NARRATION = "narration"
+    THOUGHT = "thought"
+    IMAGE = "image"
 
 class CharacterType(str, Enum):
     PERSON = "person"
@@ -62,7 +75,9 @@ class Book(SQLModel, table=True):
 class Chapter(SQLModel, table=True):
     """Таблица глав книги."""
     id: str = Field(primary_key=True, description="Local ID: vol_X_chap_Y")
-    book_id: str = Field(foreign_key="book.id", index=True)
+    book_id: str = Field(
+        sa_column=Column(String, ForeignKey("book.id", ondelete="CASCADE"), index=True, nullable=False)
+    )
     
     volume_num: int = Field(default=1)
     chapter_num: int
@@ -71,19 +86,69 @@ class Chapter(SQLModel, table=True):
     order_index: int = Field(default=0)
     raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     
-    # Кэши промежуточных этапов (JSON)
-    cache_raw_scenario: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
-    cache_ambient: Optional[List] = Field(default=None, sa_column=Column(JSON))
-    cache_emotion: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
-    
     # Relationships
     book: "Book" = Relationship(back_populates="chapters")
-    summary: Optional["ChapterSummary"] = Relationship(back_populates="chapter")
-    entries: List["ScenarioEntry"] = Relationship(back_populates="chapter")
+    summary: Optional["ChapterSummary"] = Relationship(
+        back_populates="chapter",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "uselist": False}
+    )
+    cache: Optional["ChapterCache"] = Relationship(
+        back_populates="chapter",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan", "uselist": False}
+    )
+    entries: List["ScenarioEntry"] = Relationship(
+        back_populates="chapter",
+        sa_relationship_kwargs={"cascade": "all, delete-orphan"}
+    )
+
+    # Обратная совместимость с кодом, читающим/пишущим кэш через свойства объекта главы
+    @property
+    def cache_raw_scenario(self) -> Optional[Dict]:
+        return self.cache.raw_scenario if self.cache else None
+
+    @cache_raw_scenario.setter
+    def cache_raw_scenario(self, val: Optional[Dict]):
+        if not self.cache:
+            self.cache = ChapterCache(chapter_id=self.id)
+        self.cache.raw_scenario = val
+
+    @property
+    def cache_ambient(self) -> Optional[List]:
+        return self.cache.ambient if self.cache else None
+
+    @cache_ambient.setter
+    def cache_ambient(self, val: Optional[List]):
+        if not self.cache:
+            self.cache = ChapterCache(chapter_id=self.id)
+        self.cache.ambient = val
+
+    @property
+    def cache_emotion(self) -> Optional[Dict]:
+        return self.cache.emotion if self.cache else None
+
+    @cache_emotion.setter
+    def cache_emotion(self, val: Optional[Dict]):
+        if not self.cache:
+            self.cache = ChapterCache(chapter_id=self.id)
+        self.cache.emotion = val
+
+class ChapterCache(SQLModel, table=True):
+    """Отдельная таблица для промежуточных тяжелых кэшей генерации сценария."""
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), primary_key=True)
+    )
+    raw_scenario: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    ambient: Optional[List] = Field(default=None, sa_column=Column(JSON))
+    emotion: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    
+    # Relationships
+    chapter: Optional["Chapter"] = Relationship(back_populates="cache")
 
 class ChapterSummary(SQLModel, table=True):
     """Сводка/саммари главы."""
-    chapter_id: str = Field(foreign_key="chapter.id", primary_key=True)
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), primary_key=True)
+    )
     teaser: str = Field(..., description="Краткий тизер без спойлеров.")
     synopsis: str = Field(sa_column=Column(Text), description="Детальный конспект.")
     
@@ -98,7 +163,9 @@ class VolumeSummary(SQLModel):
 class Character(SQLModel, table=True):
     """Персонажи книги."""
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    book_id: str = Field(foreign_key="book.id", index=True)
+    book_id: str = Field(
+        sa_column=Column(String, ForeignKey("book.id", ondelete="CASCADE"), index=True, nullable=False)
+    )
     
     name: str = Field(..., index=True)
     entity_type: CharacterType = Field(default=CharacterType.PERSON)
@@ -139,9 +206,17 @@ class Character(SQLModel, table=True):
 
 class ScenarioEntry(SQLModel, table=True):
     """Записи сценария."""
+    __table_args__ = (
+        Index("ix_scenarioentry_chapter_order", "chapter_id", "order_index"),
+    )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    chapter_id: str = Field(foreign_key="chapter.id", index=True)
-    speaker_id: Optional[UUID] = Field(default=None, foreign_key="character.id")
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), nullable=False, index=True)
+    )
+    speaker_id: Optional[UUID] = Field(
+        default=None,
+        sa_column=Column(ForeignKey("character.id", ondelete="SET NULL"), nullable=True, index=True)
+    )
     
     type: str = Field(..., description="dialogue, narration, thought, image")
     text: Optional[str] = Field(default=None, sa_column=Column(Text))
@@ -299,7 +374,9 @@ import time
 class LLMMetric(SQLModel, table=True):
     """Метрики вызовов LLM для главы."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    chapter_id: str = Field(foreign_key="chapter.id", index=True)
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), index=True, nullable=False)
+    )
     prompt_type: str
     model_name: str
     input_tokens: int = Field(default=0)
@@ -312,8 +389,10 @@ class LLMMetric(SQLModel, table=True):
 class AudioMetric(SQLModel, table=True):
     """Метрики генерации аудио для реплик сценария."""
     id: Optional[int] = Field(default=None, primary_key=True)
-    chapter_id: str = Field(foreign_key="chapter.id", index=True)
-    entry_id: str
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), index=True, nullable=False)
+    )
+    entry_id: str = Field(index=True)
     speaker: str
     text_length: int
     audio_duration_ms: int
@@ -326,7 +405,12 @@ class AudioMetric(SQLModel, table=True):
 
 class MetricCounter(SQLModel, table=True):
     """Счетчики различных событий/ошибок по главам."""
+    __table_args__ = (
+        UniqueConstraint("chapter_id", "counter_name", name="uq_metriccounter_chapter_counter"),
+    )
     id: Optional[int] = Field(default=None, primary_key=True)
-    chapter_id: str = Field(foreign_key="chapter.id", index=True)
+    chapter_id: str = Field(
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), index=True, nullable=False)
+    )
     counter_name: str
     value: int = Field(default=0)

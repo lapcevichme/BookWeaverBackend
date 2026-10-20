@@ -51,7 +51,24 @@ engine = create_engine(f"sqlite:///{TASKS_DB_PATH}", connect_args={"check_same_t
 
 def init_tasks_db():
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    SQLModel.metadata.create_all(engine)
+    SQLModel.metadata.create_all(engine, tables=[TaskRecord.__table__])
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            ghost_tables = [
+                "book", "chapter", "chaptercache", "character", "chaptersummary",
+                "scenarioentry", "llmmetric", "audiometric", "metriccounter",
+                "ambienttrack", "sfxtrack", "pronunciationentry", "systemsetting"
+            ]
+            for gt in ghost_tables:
+                tbl_check = conn.execute(text(f"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{gt}'")).scalar()
+                if tbl_check:
+                    cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
+                    if cnt == 0:
+                        conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.commit()
+    except Exception as e:
+        logger.warning(f"Failed to clean ghost tables in tasks.db: {e}")
 
 # --- Worker Logic ---
 

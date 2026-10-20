@@ -1,7 +1,7 @@
 from typing import List, Optional, Dict, Any, Tuple
 from sqlmodel import Session, select
 from core.database import get_book_session, init_book_db
-from core.data_models import Book, Chapter, Character, ScenarioEntry, ChapterSummary, CharacterArchive, ChapterSummaryArchive, BookManifest, ManifestMeta, ManifestChapterEntry, ManifestConfig
+from core.data_models import Book, Chapter, ChapterCache, Character, ScenarioEntry, ChapterSummary, CharacterArchive, ChapterSummaryArchive, BookManifest, ManifestMeta, ManifestChapterEntry, ManifestConfig
 from core import path_manager
 from pathlib import Path
 
@@ -143,17 +143,33 @@ class BookRepository:
             return session.exec(statement).all()
 
     def set_cache(self, chapter_id: str, name: str, data: Any):
+        clean_name = name.removeprefix("cache_")
         with self.get_session() as session:
-            db_chap = session.get(Chapter, chapter_id)
-            if db_chap:
-                setattr(db_chap, f"cache_{name}", data)
-                session.add(db_chap)
-                session.commit()
+            cache = session.get(ChapterCache, chapter_id)
+            if not cache:
+                cache = ChapterCache(chapter_id=chapter_id)
+            if hasattr(cache, clean_name):
+                setattr(cache, clean_name, data)
+            elif hasattr(cache, f"cache_{clean_name}"):
+                setattr(cache, f"cache_{clean_name}", data)
+            session.add(cache)
+            session.commit()
 
     def get_cache(self, chapter_id: str, name: str) -> Optional[Any]:
-        db_chap = self.get_chapter(chapter_id)
-        if not db_chap: return None
-        return getattr(db_chap, f"cache_{name}", None)
+        clean_name = name.removeprefix("cache_")
+        with self.get_session() as session:
+            cache = session.get(ChapterCache, chapter_id)
+            if cache:
+                if hasattr(cache, clean_name) and getattr(cache, clean_name) is not None:
+                    return getattr(cache, clean_name)
+                if hasattr(cache, f"cache_{clean_name}") and getattr(cache, f"cache_{clean_name}") is not None:
+                    return getattr(cache, f"cache_{clean_name}")
+            
+            # Fallback для старых записей до миграции
+            db_chap = session.get(Chapter, chapter_id)
+            if db_chap and hasattr(db_chap, f"cache_{clean_name}"):
+                return getattr(db_chap, f"cache_{clean_name}", None)
+            return None
 
     def update_storage_size(self):
         """Рекурсивно считает размер папки книги и сохраняет в БД."""

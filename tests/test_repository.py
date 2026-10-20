@@ -85,6 +85,66 @@ class TestRepository(unittest.TestCase):
         self.assertEqual(manifest.meta.title, "Repo Test Book")
         self.assertEqual(len(manifest.structure), 1)
 
+    def test_chapter_cache(self):
+        self.repo.set_cache("vol_1_chap_1", "raw_scenario", {"scenes": [1, 2, 3]})
+        cached = self.repo.get_cache("vol_1_chap_1", "raw_scenario")
+        self.assertEqual(cached, {"scenes": [1, 2, 3]})
+
+        # Проверяем, что кэш лежит именно в ChapterCache
+        with self.repo.get_session() as session:
+            from core.data_models import ChapterCache
+            cache_row = session.get(ChapterCache, "vol_1_chap_1")
+            self.assertIsNotNone(cache_row)
+            self.assertEqual(cache_row.raw_scenario, {"scenes": [1, 2, 3]})
+
+    def test_character_delete_sets_null_on_scenario_entry(self):
+        chars = self.repo.get_characters()
+        alice = next(c for c in chars if c.name == "Alice")
+
+        with self.repo.get_session() as session:
+            entry = ScenarioEntry(
+                chapter_id="vol_1_chap_1",
+                speaker_id=alice.id,
+                speaker_name="Alice",
+                type="dialogue",
+                text="Hello from Alice",
+                order_index=10
+            )
+            session.add(entry)
+            session.commit()
+            entry_id = entry.id
+
+        # Удаляем персонажа
+        with self.repo.get_session() as session:
+            db_alice = session.get(Character, alice.id)
+            session.delete(db_alice)
+            session.commit()
+
+        # Реплика должна остаться, но speaker_id должен стать None (ondelete="SET NULL")
+        with self.repo.get_session() as session:
+            db_entry = session.get(ScenarioEntry, entry_id)
+            self.assertIsNotNone(db_entry)
+            self.assertIsNone(db_entry.speaker_id)
+            self.assertEqual(db_entry.speaker_name, "Alice")
+            self.assertEqual(db_entry.text, "Hello from Alice")
+
+    def test_chapter_delete_cascades_entries_and_summary(self):
+        with self.repo.get_session() as session:
+            entry = ScenarioEntry(chapter_id="vol_1_chap_1", type="narration", text="To be deleted", order_index=99)
+            session.add(entry)
+            session.commit()
+
+        with self.repo.get_session() as session:
+            chap = session.get(Chapter, "vol_1_chap_1")
+            session.delete(chap)
+            session.commit()
+
+        with self.repo.get_session() as session:
+            entries = self.repo.get_scenario_entries("vol_1_chap_1")
+            self.assertEqual(len(entries), 0)
+            summary = session.get(ChapterSummary, "vol_1_chap_1")
+            self.assertIsNone(summary)
+
     def test_system_models(self):
         engine = init_system_db()
         self.assertIsNotNone(engine)
