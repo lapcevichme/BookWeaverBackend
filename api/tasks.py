@@ -1,4 +1,4 @@
-from typing import Dict
+from typing import Dict, Optional
 from fastapi import APIRouter, HTTPException
 
 from api import state
@@ -92,6 +92,19 @@ async def list_tasks_api():
         stage=t.stage,
         message=t.message
     ) for t in tasks}
+
+
+@router.post("/prune")
+async def prune_tasks_api(max_age_days: Optional[int] = 7, keep_last: Optional[int] = 500, min_keep: int = 10):
+    """
+    Удаляет устаревшие завершенные, проваленные и отмененные задачи для поддержания чистоты базы данных.
+    """
+    from core.task_queue import prune_tasks
+    count = prune_tasks(max_age_days=max_age_days, keep_last=keep_last, min_keep=min_keep)
+    return {
+        "pruned_count": count,
+        "message": f"Очищено {count} устаревших задач."
+    }
 
 
 @router.post("/{task_id}/cancel")

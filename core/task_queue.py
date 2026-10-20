@@ -5,10 +5,11 @@ import json
 import uuid
 from enum import Enum
 from typing import Dict, Any, Optional, Callable
-from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, Column, create_engine, Session, select
-from sqlalchemy import String
+from datetime import datetime, timezone, timedelta
+from sqlmodel import SQLModel, Field, Column, create_engine, Session, select, delete
+from sqlalchemy import String, Index, text
 import config
+import core.database  # noqa: F401 - регистрирует sqlite pragmas (WAL, busy_timeout) для всех Engine
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,10 @@ class TaskCancelledException(Exception):
     pass
 
 class TaskRecord(SQLModel, table=True):
+    __table_args__ = (
+        Index("ix_taskrecord_status_created_at", "status", "created_at"),
+        Index("ix_taskrecord_created_at", "created_at"),
+    )
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     book_id: str = Field(index=True)
     type: str
@@ -59,6 +64,64 @@ class TaskRecord(SQLModel, table=True):
 TASKS_DB_PATH = config.OUTPUT_DIR / "tasks.db"
 engine = create_engine(f"sqlite:///{TASKS_DB_PATH}", connect_args={"check_same_thread": False})
 
+def prune_tasks(
+    max_age_days: Optional[int] = 7,
+    keep_last: Optional[int] = 500,
+    min_keep: int = 10
+) -> int:
+    """
+    Удаляет устаревшие завершенные (complete), проваленные (failed) и отмененные (cancelled) задачи.
+    Никогда не удаляет активные задачи (queued, processing, paused).
+
+    :param max_age_days: Удалять задачи старше указанного количества дней. Если None, возраст не ограничивается.
+    :param keep_last: Максимальное количество терминальных задач для хранения. Все, что сверх, удаляется.
+    :param min_keep: Минимальное количество последних задач, гарантированно защищенных от удаления по возрасту.
+    :return: Количество удаленных задач.
+    """
+    terminal_statuses = [TaskStatus.COMPLETE, TaskStatus.FAILED, TaskStatus.CANCELLED]
+
+    with Session(engine) as session:
+        statement = (
+            select(TaskRecord.id, TaskRecord.updated_at)
+            .where(TaskRecord.status.in_(terminal_statuses))
+            .order_by(TaskRecord.created_at.desc())
+        )
+        records = session.exec(statement).all()
+        if not records:
+            return 0
+
+        cutoff = None
+        if max_age_days is not None and max_age_days >= 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=max_age_days)
+
+        ids_to_delete = []
+        for idx, (task_id, updated_at) in enumerate(records):
+            if idx < min_keep:
+                continue
+
+            if keep_last is not None and idx >= keep_last:
+                ids_to_delete.append(task_id)
+                continue
+
+            if cutoff is not None and updated_at:
+                task_time = updated_at
+                if task_time.tzinfo is None:
+                    task_time = task_time.replace(tzinfo=timezone.utc)
+                if task_time < cutoff:
+                    ids_to_delete.append(task_id)
+
+        if not ids_to_delete:
+            return 0
+
+        batch_size = 500
+        for i in range(0, len(ids_to_delete), batch_size):
+            batch = ids_to_delete[i:i + batch_size]
+            session.exec(delete(TaskRecord).where(TaskRecord.id.in_(batch)))
+        session.commit()
+
+        logger.info(f"🧹 Pruned {len(ids_to_delete)} old tasks from tasks.db")
+        return len(ids_to_delete)
+
 def init_tasks_db():
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     SQLModel.metadata.create_all(engine, tables=[TaskRecord.__table__])
@@ -76,9 +139,17 @@ def init_tasks_db():
                     cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
                     if cnt == 0:
                         conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_taskrecord_status_created_at ON taskrecord (status, created_at)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_taskrecord_created_at ON taskrecord (created_at)"))
             conn.commit()
     except Exception as e:
-        logger.warning(f"Failed to clean ghost tables in tasks.db: {e}")
+        logger.warning(f"Failed to clean ghost tables or create indexes in tasks.db: {e}")
+
+    try:
+        # Автоматическая очистка старых задач при инициализации (старше 14 дней, сохраняя до 1000)
+        prune_tasks(max_age_days=14, keep_last=1000, min_keep=10)
+    except Exception as e:
+        logger.warning(f"Failed to prune old tasks in tasks.db: {e}")
 
 # --- Worker Logic ---
 
@@ -87,6 +158,7 @@ class TaskWorker:
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._registry: Dict[str, Callable] = {}
+        self._last_prune_time: float = time.time()
 
     def register_handler(self, task_type: str, handler: Callable):
         self._registry[task_type] = handler
@@ -108,6 +180,15 @@ class TaskWorker:
     def _run_loop(self):
         while not self._stop_event.is_set():
             try:
+                # Периодическая ротация старых задач (раз в час)
+                now = time.time()
+                if now - self._last_prune_time > 3600:
+                    try:
+                        prune_tasks()
+                    except Exception as pe:
+                        logger.warning(f"Periodic task pruning failed: {pe}")
+                    self._last_prune_time = now
+
                 self._process_next_task()
             except Exception as e:
                 logger.error(f"Error in task worker loop: {e}", exc_info=True)
