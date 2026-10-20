@@ -92,7 +92,23 @@ ELEVENLABS_API_URL = "https://api.elevenlabs.io/v1/shared-voices"
 TEMP_PREVIEWS_DIR = TEMP_DIR / "voice_previews"
 SELECTED_VOICES_DIR = VOICES_DIR / "selected_refs"
 
+import time
+
+_db_settings_cache = {}
+_db_settings_cache_time = 0.0
+_CACHE_TTL_SECONDS = 2.0
+
+def invalidate_settings_cache():
+    global _db_settings_cache, _db_settings_cache_time
+    _db_settings_cache.clear()
+    _db_settings_cache_time = 0.0
+
 def _get_db_setting(key: str, default):
+    global _db_settings_cache, _db_settings_cache_time
+    now = time.time()
+    if now - _db_settings_cache_time < _CACHE_TTL_SECONDS and key in _db_settings_cache:
+        return _db_settings_cache[key]
+
     db_path = OUTPUT_DIR / "system.db"
     if not db_path.exists():
         return default
@@ -105,7 +121,10 @@ def _get_db_setting(key: str, default):
         cursor.execute("SELECT value_json FROM systemsetting WHERE key = ?", (key,))
         row = cursor.fetchone()
         if row:
-            return json.loads(row[0])
+            val = json.loads(row[0])
+            _db_settings_cache[key] = val
+            _db_settings_cache_time = now
+            return val
     except (sqlite3.OperationalError, sqlite3.DatabaseError, json.JSONDecodeError):
         pass
     finally:
