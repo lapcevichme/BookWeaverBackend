@@ -3,6 +3,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from api import state
 from api.models import TaskStatusResponse, BookTaskRequest, ChapterTaskRequest
+from core.task_queue import TaskType
 
 logger = logging.getLogger(__name__)
 
@@ -15,7 +16,7 @@ router = APIRouter(
 async def start_character_analysis(req: BookTaskRequest):
     """Анализирует персонажей во всей (или первых N) книге (LLM)."""
     return state.start_task(
-        task_type="process_book",
+        task_type=TaskType.PROCESS_BOOK,
         book_id=req.book_name,
         book_name=req.book_name,
         max_chapters=req.max_chapters
@@ -26,7 +27,7 @@ async def start_character_analysis(req: BookTaskRequest):
 async def start_summary_generation(req: BookTaskRequest):
     """Генерирует пересказы для всех (или первых N) глав (LLM)."""
     return state.start_task(
-        task_type="generate_summary",
+        task_type=TaskType.GENERATE_SUMMARY,
         book_id=req.book_name,
         book_name=req.book_name,
         max_chapters=req.max_chapters
@@ -37,7 +38,7 @@ async def start_summary_generation(req: BookTaskRequest):
 async def start_scenario_generation(req: ChapterTaskRequest):
     """Генерирует сценарий для одной главы (LLM + Sound Design)."""
     return state.start_task(
-        task_type="generate_scenario",
+        task_type=TaskType.GENERATE_SCENARIO,
         book_id=req.book_name,
         book_name=req.book_name,
         volume_num=req.volume_num,
@@ -49,7 +50,7 @@ async def start_scenario_generation(req: ChapterTaskRequest):
 async def start_tts_synthesis(req: ChapterTaskRequest):
     """Озвучивает главу (TTS)."""
     return state.start_task(
-        task_type="generate_tts",
+        task_type=TaskType.GENERATE_TTS,
         book_id=req.book_name,
         book_name=req.book_name,
         volume_num=req.volume_num,
@@ -60,7 +61,7 @@ async def start_tts_synthesis(req: ChapterTaskRequest):
 async def start_full_cycle(req: BookTaskRequest):
     """Запускает полный цикл: Саммари -> Персонажи -> Сценарии (с опциональным ограничением max_chapters)."""
     return state.start_task(
-        task_type="full_cycle",
+        task_type=TaskType.FULL_CYCLE,
         book_id=req.book_name,
         book_name=req.book_name,
         max_chapters=req.max_chapters

@@ -3,22 +3,32 @@ import threading
 import time
 import json
 import uuid
+from enum import Enum
 from typing import Dict, Any, Optional, Callable
 from datetime import datetime, timezone
-from sqlmodel import SQLModel, Field, create_engine, Session, select
+from sqlmodel import SQLModel, Field, Column, create_engine, Session, select
+from sqlalchemy import String
 import config
 
 logger = logging.getLogger(__name__)
 
 # --- Models ---
 
-class TaskStatus:
+class TaskStatus(str, Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
     COMPLETE = "complete"
     FAILED = "failed"
     CANCELLED = "cancelled"
     PAUSED = "paused"
+
+class TaskType(str, Enum):
+    PROCESS_BOOK = "process_book"
+    GENERATE_SUMMARY = "generate_summary"
+    GENERATE_SCENARIO = "generate_scenario"
+    GENERATE_TTS = "generate_tts"
+    GENERATE_IMAGES = "generate_images"
+    FULL_CYCLE = "full_cycle"
 
 class TaskCancelledException(Exception):
     """Исключение для прерывания задачи пользователем."""
@@ -28,7 +38,7 @@ class TaskRecord(SQLModel, table=True):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()), primary_key=True)
     book_id: str = Field(index=True)
     type: str
-    status: str = Field(default=TaskStatus.QUEUED)
+    status: TaskStatus = Field(default=TaskStatus.QUEUED, sa_column=Column(String, default=TaskStatus.QUEUED))
     progress: float = Field(default=0.0)
     stage: str = Field(default="В очереди")
     message: str = Field(default="Задача поставлена в очередь.")

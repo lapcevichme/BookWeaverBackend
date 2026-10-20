@@ -8,7 +8,7 @@ from uuid import UUID, uuid4
 
 import config
 from core.book_repository import BookRepository
-from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList, CharacterType
+from core.data_models import Character, CharacterArchive, CharacterReconResult, CharacterPatchList, CharacterType, ChapterStatus
 from services.model_manager import ModelManager
 from pipelines import prompts
 from utils.metrics import metrics_collector
@@ -80,7 +80,7 @@ class CharacterAnalysisPipeline:
 
                 if not chapter_text.strip():
                     self._mark_chapter_processed(master_archive, chapter_id)
-                    repo.update_chapter_status(chapter_id, "processed")
+                    repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
                     continue
 
                 chapter_summary_text = None
@@ -100,7 +100,7 @@ class CharacterAnalysisPipeline:
                 if not recon_result.mentioned_existing_character_ids and not recon_result.newly_discovered_names:
                     logger.info(f"В главе {chapter_id} персонажи не обнаружены.")
                     self._mark_chapter_processed(master_archive, chapter_id)
-                    repo.update_chapter_status(chapter_id, "processed")
+                    repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
                     continue
 
                 relevant_chars = self._filter_archive_by_ids(master_archive, recon_result.mentioned_existing_character_ids)
@@ -138,7 +138,7 @@ class CharacterAnalysisPipeline:
                 
                 # СОХРАНЕНИЕ В БД
                 repo.save_characters(master_archive.characters)
-                repo.update_chapter_status(chapter_id, "processed")
+                repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
                 metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")

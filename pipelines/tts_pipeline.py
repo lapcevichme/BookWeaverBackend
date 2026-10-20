@@ -249,7 +249,8 @@ class TTSPipeline:
                     
                     total_duration_ms += audio_duration_ms
 
-            repo.update_chapter_status(chapter_id, "audio_ready")
+            from core.data_models import ChapterStatus
+            repo.update_chapter_status(chapter_id, ChapterStatus.AUDIO_READY)
             update_progress(1.0, "Завершено", f"Глава озвучена! Длительность: {total_duration_ms / 1000:.1f} сек.")
 
         except Exception as e:

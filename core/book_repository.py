@@ -1,7 +1,11 @@
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any, Tuple, Union
 from sqlmodel import Session, select
 from core.database import get_book_session, init_book_db
-from core.data_models import Book, Chapter, ChapterCache, Character, ScenarioEntry, ChapterSummary, CharacterArchive, ChapterSummaryArchive, BookManifest, ManifestMeta, ManifestChapterEntry, ManifestConfig
+from core.data_models import (
+    Book, Chapter, ChapterCache, Character, ScenarioEntry, ChapterSummary,
+    CharacterArchive, ChapterSummaryArchive, BookManifest, ManifestMeta,
+    ManifestChapterEntry, ManifestConfig, ChapterStatus
+)
 from core import path_manager
 from pathlib import Path
 
@@ -34,11 +38,11 @@ class BookRepository:
                 .order_by(Chapter.order_index)
             ).all()
 
-    def update_chapter_status(self, chapter_id: str, status: str):
+    def update_chapter_status(self, chapter_id: str, status: Union[ChapterStatus, str]):
         with self.get_session() as session:
             db_chap = session.get(Chapter, chapter_id)
             if db_chap:
-                db_chap.status = status
+                db_chap.status = ChapterStatus(status) if isinstance(status, str) and status in ChapterStatus._value2member_map_ else status
                 session.add(db_chap)
                 session.commit()
 

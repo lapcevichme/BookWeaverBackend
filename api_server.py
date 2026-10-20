@@ -14,7 +14,7 @@ from api import state
 from api import tasks, projects, library, ai_tasks
 from api.mobile import mobile_api_router
 from api.models import ServerStateEnum
-from core.task_queue import init_tasks_db, worker
+from core.task_queue import init_tasks_db, worker, TaskType
 from main import Application
 from utils.setup_logging import setup_logging
 
@@ -50,12 +50,12 @@ async def lifespan(app: FastAPI):
         state.app_pipelines = Application(model_manager=state.model_manager)
         
         # Регистрация обработчиков задач в очереди
-        worker.register_handler("process_book", state.app_pipelines.character_pipeline.run)
-        worker.register_handler("generate_summary", state.app_pipelines.summary_pipeline.run)
-        worker.register_handler("generate_scenario", state.app_pipelines.scenario_pipeline.run)
-        worker.register_handler("generate_tts", state.app_pipelines.tts_pipeline.run)
-        worker.register_handler("generate_images", state.app_pipelines.image_pipeline.run)
-        worker.register_handler("full_cycle", state.app_pipelines.run_full_cycle)
+        worker.register_handler(TaskType.PROCESS_BOOK, state.app_pipelines.character_pipeline.run)
+        worker.register_handler(TaskType.GENERATE_SUMMARY, state.app_pipelines.summary_pipeline.run)
+        worker.register_handler(TaskType.GENERATE_SCENARIO, state.app_pipelines.scenario_pipeline.run)
+        worker.register_handler(TaskType.GENERATE_TTS, state.app_pipelines.tts_pipeline.run)
+        worker.register_handler(TaskType.GENERATE_IMAGES, state.app_pipelines.image_pipeline.run)
+        worker.register_handler(TaskType.FULL_CYCLE, state.app_pipelines.run_full_cycle)
         
         # Запуск фонового воркера
         worker.start()

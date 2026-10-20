@@ -3,6 +3,10 @@ from typing import List, Literal, Optional, Dict, Any
 from enum import Enum
 from uuid import UUID
 
+from core.data_models import (
+    ChapterStatus, BookStatus, RoleTier, CharacterGender, CharacterType, ScenarioEntryType
+)
+
 # --- Server State ---
 
 class ServerStateEnum(str, Enum):
@@ -42,7 +46,7 @@ class ChapterStatusDto(BaseModel):
     chapter_num: int
     id: str
     title: Optional[str] = None
-    status: str
+    status: ChapterStatus
     has_audio: bool
 
 class ProjectDetailsResponse(BaseModel):
@@ -150,9 +154,9 @@ class UpdateScenarioEntryRequest(BaseModel):
 
 class UpdateCharacterRequest(BaseModel):
     name: Optional[str] = None
-    entity_type: Optional[str] = None
-    gender: Optional[str] = None
-    role_tier: Optional[str] = None
+    entity_type: Optional[CharacterType] = None
+    gender: Optional[CharacterGender] = None
+    role_tier: Optional[RoleTier] = None
     spoiler_free_description: Optional[str] = None
     description: Optional[str] = None
     visual_base: Optional[str] = None
@@ -163,5 +167,5 @@ class UpdateBookRequest(BaseModel):
     title: Optional[str] = None
     author: Optional[str] = None
     description: Optional[str] = None
-    status: Optional[str] = None
+    status: Optional[BookStatus] = None
     tags: Optional[List[str]] = None

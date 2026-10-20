@@ -123,7 +123,7 @@ class ScenarioGenerationPipeline:
             # 4. Сборка и сохранение в БД
             with repo.get_session() as session:
                 from sqlmodel import delete, select
-                from core.data_models import ScenarioEntry, Chapter
+                from core.data_models import ScenarioEntry, Chapter, ChapterStatus
                 # Очищаем старое
                 session.exec(delete(ScenarioEntry).where(ScenarioEntry.chapter_id == chapter_id))
                 
@@ -157,7 +157,7 @@ class ScenarioGenerationPipeline:
                 
                 # Обновляем статус главы
                 db_chap = session.get(Chapter, chapter_id)
-                if db_chap: db_chap.status = "scenario_ready"
+                if db_chap: db_chap.status = ChapterStatus.SCENARIO_READY
                 
                 session.commit()
             

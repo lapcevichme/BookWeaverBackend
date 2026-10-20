@@ -15,10 +15,18 @@ from sqlalchemy.orm import reconstructor
 
 # --- Enums ---
 
+class BookStatus(str, Enum):
+    ONGOING = "ongoing"
+    COMPLETED = "completed"
+    HIATUS = "hiatus"
+    ABANDONED = "abandoned"
+
 class ChapterStatus(str, Enum):
     DRAFT = "draft"
     PROCESSING = "processing"
+    PROCESSED = "processed"
     SCENARIO_READY = "scenario_ready"
+    AUDIO_READY = "audio_ready"
     TTS_READY = "tts_ready"
     COMPLETED = "completed"
 
@@ -32,6 +40,18 @@ class CharacterType(str, Enum):
     PERSON = "person"
     ANIMAL = "animal"
     OBJECT = "object"
+    UNKNOWN = "unknown"
+
+class RoleTier(str, Enum):
+    PROTAGONIST = "protagonist"
+    MAJOR = "major"
+    MINOR = "minor"
+    BACKGROUND = "background"
+
+class CharacterGender(str, Enum):
+    MALE = "male"
+    FEMALE = "female"
+    NEUTRAL = "neutral"
     UNKNOWN = "unknown"
 
 # --- Timeline Models (Stored as JSON in DB) ---
@@ -58,7 +78,7 @@ class Book(SQLModel, table=True):
     title: str = Field(index=True)
     author: Optional[str] = None
     description: Optional[str] = None
-    status: str = Field(default="ongoing")
+    status: BookStatus = Field(default=BookStatus.ONGOING, sa_column=Column(String, default=BookStatus.ONGOING))
     cover_image_path: Optional[str] = None
     source_url: Optional[str] = None
     version: str = Field(default="1.0.0")
@@ -82,7 +102,7 @@ class Chapter(SQLModel, table=True):
     volume_num: int = Field(default=1)
     chapter_num: int
     title: Optional[str] = None
-    status: str = Field(default="draft")
+    status: ChapterStatus = Field(default=ChapterStatus.DRAFT, sa_column=Column(String, default=ChapterStatus.DRAFT))
     order_index: int = Field(default=0)
     raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     
@@ -170,8 +190,8 @@ class Character(SQLModel, table=True):
     name: str = Field(..., index=True)
     entity_type: CharacterType = Field(default=CharacterType.PERSON)
     aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
-    gender: Optional[str] = Field(None)
-    role_tier: str = Field(default="background")
+    gender: Optional[CharacterGender] = Field(default=None, sa_column=Column(String, nullable=True))
+    role_tier: RoleTier = Field(default=RoleTier.BACKGROUND, sa_column=Column(String, default=RoleTier.BACKGROUND))
     spoiler_free_description: str = Field(..., sa_column=Column(Text))
     description: str = Field(..., sa_column=Column(Text))
     visual_base: Optional[str] = Field(None)
@@ -218,7 +238,7 @@ class ScenarioEntry(SQLModel, table=True):
         sa_column=Column(ForeignKey("character.id", ondelete="SET NULL"), nullable=True, index=True)
     )
     
-    type: str = Field(..., description="dialogue, narration, thought, image")
+    type: ScenarioEntryType = Field(default=ScenarioEntryType.NARRATION, sa_column=Column(String, default=ScenarioEntryType.NARRATION), description="dialogue, narration, thought, image")
     text: Optional[str] = Field(default=None, sa_column=Column(Text))
     tts_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     speaker_name: Optional[str] = None
@@ -245,11 +265,11 @@ class CharacterPatch(SQLModel):
     entity_type: Optional[CharacterType] = None
     naming_reasoning: Optional[str] = None
     name: Optional[str] = None
-    role_tier: Optional[str] = None
+    role_tier: Optional[RoleTier] = None
     description: Optional[str] = None
     spoiler_free_description: Optional[str] = None
     aliases: Optional[List[str]] = None
-    gender: Optional[str] = None
+    gender: Optional[CharacterGender] = None
     visual_base: Optional[str] = None
     voice_base: Optional[str] = None
     current_chapter_action: Optional[str] = None
@@ -262,6 +282,10 @@ class CharacterPatch(SQLModel):
         if isinstance(data, dict):
             if data.get('entity_type') and isinstance(data.get('entity_type'), str):
                 data['entity_type'] = data['entity_type'].lower()
+            if data.get('role_tier') and isinstance(data.get('role_tier'), str):
+                data['role_tier'] = data['role_tier'].lower()
+            if data.get('gender') and isinstance(data.get('gender'), str):
+                data['gender'] = data['gender'].lower()
         return data
 
 class CharacterPatchList(SQLModel):
@@ -273,7 +297,7 @@ class RawChapterSummary(SQLModel):
 
 class RawScenarioEntry(SQLModel):
     id: UUID = Field(default_factory=uuid4)
-    type: Literal["dialogue", "narration", "thought", "image"]
+    type: ScenarioEntryType
     speaker: Optional[str] = None
     text: Optional[str] = None
     src: Optional[str] = None
@@ -282,7 +306,7 @@ class RawScenario(SQLModel):
     scenario: List[RawScenarioEntry]
 
 class LlmRawScenarioEntry(SQLModel):
-    type: Literal["dialogue", "narration", "thought", "image"]
+    type: ScenarioEntryType
     speaker: Optional[str] = None
     text: Optional[str] = None
     src: Optional[str] = None
@@ -341,7 +365,7 @@ class ManifestMeta(SQLModel):
     author: Optional[str] = "Неизвестный автор"
     description: Optional[str] = ""
     tags: List[str] = Field(default_factory=list)
-    status: str = "ongoing"
+    status: BookStatus = BookStatus.ONGOING
     source_url: Optional[str] = None
     version: str = "1.0.0"
     total_duration_ms: int = 0
@@ -353,7 +377,7 @@ class ManifestChapterEntry(SQLModel):
     title: str
     vol: int = 1
     chap: int
-    status: str = "draft"
+    status: ChapterStatus = ChapterStatus.DRAFT
     id: Optional[str] = None
 
 class ManifestConfig(SQLModel):
