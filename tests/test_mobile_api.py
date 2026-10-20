@@ -50,6 +50,8 @@ class TestMobileAPI(unittest.TestCase):
 
     def tearDown(self):
         import config
+        from core.database import dispose_engine
+        dispose_engine(self.book_dir)
         config.OUTPUT_DIR = self.original_output_dir
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 

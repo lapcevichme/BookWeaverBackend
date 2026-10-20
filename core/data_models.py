@@ -95,6 +95,9 @@ class Book(SQLModel, table=True):
 
 class Chapter(SQLModel, table=True):
     """Таблица глав книги."""
+    __table_args__ = (
+        Index("ix_chapter_book_order", "book_id", "order_index"),
+    )
     id: str = Field(primary_key=True, description="Local ID: vol_X_chap_Y")
     book_id: str = Field(
         sa_column=Column(String, ForeignKey("book.id", ondelete="CASCADE"), index=True, nullable=False)
@@ -232,7 +235,7 @@ class ScenarioEntry(SQLModel, table=True):
     )
     id: UUID = Field(default_factory=uuid4, primary_key=True)
     chapter_id: str = Field(
-        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), nullable=False, index=True)
+        sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), nullable=False)
     )
     speaker_id: Optional[UUID] = Field(
         default=None,

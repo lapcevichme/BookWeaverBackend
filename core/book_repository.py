@@ -111,24 +111,21 @@ class BookRepository:
 
     def get_chapter_text(self, chapter_id: str) -> str:
         """Возвращает сырой текст главы из БД или из файла (с кэшированием в БД)."""
-        db_chap = self.get_chapter(chapter_id)
-        if db_chap and db_chap.raw_text:
-            return db_chap.raw_text
-            
-        if not db_chap:
-            raise ValueError(f"Глава {chapter_id} не найдена в БД.")
+        with self.get_session() as session:
+            db_chap = session.get(Chapter, chapter_id)
+            if not db_chap:
+                raise ValueError(f"Глава {chapter_id} не найдена в БД.")
+            if db_chap.raw_text:
+                return db_chap.raw_text
 
-        path = path_manager.get_chapter_text_path(self.book_id, db_chap.volume_num, db_chap.chapter_num)
-        if path.exists():
-            text = path.read_text("utf-8")
-            # Кэшируем текст в БД для будущего
-            with self.get_session() as session:
-                db_chap = session.get(Chapter, chapter_id)
+            path = path_manager.get_chapter_text_path(self.book_id, db_chap.volume_num, db_chap.chapter_num)
+            if path.exists():
+                text = path.read_text("utf-8")
                 db_chap.raw_text = text
                 session.add(db_chap)
                 session.commit()
-            return text
-        raise FileNotFoundError(f"Текст главы {chapter_id} не найден на диске.")
+                return text
+            raise FileNotFoundError(f"Текст главы {chapter_id} не найден на диске.")
 
     def get_characters(self) -> List[Character]:
         with self.get_session() as session:
@@ -201,33 +198,41 @@ class BookRepository:
         return optimize_db(get_engine_for_book(self.book_output_dir))
 
     def load_manifest(self) -> BookManifest:
-        book = self.get_book()
-        if not book:
-            raise ValueError(f"Книга {self.book_id} не найдена в БД.")
-            
-        meta = ManifestMeta(
-            title=book.title,
-            author=book.author,
-            description=book.description,
-            tags=book.tags,
-            status=book.status
-        )
-        
-        db_chapters = self.get_all_chapters()
-        structure = [
-            ManifestChapterEntry(
-                order=c.order_index,
-                title=c.title or f"Глава {c.chapter_num}",
-                vol=c.volume_num,
-                chap=c.chapter_num,
-                status=c.status,
-                id=c.id
-            ) for c in db_chapters
-        ]
-            
-        return BookManifest(
-            project_id=self.book_id,
-            meta=meta,
-            structure=structure,
-            config=ManifestConfig(**book.config)
-        )
+        with self.get_session() as session:
+            book = session.get(Book, self.book_id)
+            if not book:
+                raise ValueError(f"Книга {self.book_id} не найдена в БД.")
+
+            meta = ManifestMeta(
+                title=book.title,
+                author=book.author,
+                description=book.description,
+                tags=book.tags,
+                status=book.status
+            )
+
+            from sqlalchemy.orm import defer
+            db_chapters = session.exec(
+                select(Chapter)
+                .where(Chapter.book_id == self.book_id)
+                .options(defer(Chapter.raw_text))
+                .order_by(Chapter.order_index)
+            ).all()
+
+            structure = [
+                ManifestChapterEntry(
+                    order=c.order_index,
+                    title=c.title or f"Глава {c.chapter_num}",
+                    vol=c.volume_num,
+                    chap=c.chapter_num,
+                    status=c.status,
+                    id=c.id
+                ) for c in db_chapters
+            ]
+
+            return BookManifest(
+                project_id=self.book_id,
+                meta=meta,
+                structure=structure,
+                config=ManifestConfig(**book.config)
+            )

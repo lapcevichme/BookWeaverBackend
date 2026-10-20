@@ -35,6 +35,8 @@ class TestRepository(unittest.TestCase):
         self.repo.book_output_dir = self.book_dir
 
     def tearDown(self):
+        from core.database import dispose_engine
+        dispose_engine(self.book_dir)
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_get_book(self):
