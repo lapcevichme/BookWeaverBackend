@@ -111,6 +111,7 @@ def init_book_db(book_path: Path):
                     cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
                     if cnt == 0:
                         conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.execute(text("PRAGMA optimize;"))
             conn.commit()
     except Exception as e:
         logger.warning(f"Migration/cleanup failed for {book_path.name}: {e}")
@@ -156,11 +157,24 @@ def init_system_db():
                     cnt = conn.execute(text(f"SELECT COUNT(*) FROM \"{gt}\"")).scalar()
                     if cnt == 0:
                         conn.execute(text(f"DROP TABLE \"{gt}\""))
+            conn.execute(text("PRAGMA optimize;"))
             conn.commit()
     except Exception as e:
         logger.warning(f"Failed to clean ghost tables in system.db: {e}")
         
     return engine
+
+def optimize_db(engine: Engine) -> list:
+    """Запускает PRAGMA optimize для сбора статистики и оптимизации планировщика запросов SQLite."""
+    try:
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            res = conn.execute(text("PRAGMA optimize;")).fetchall()
+            conn.commit()
+            return [str(row[0]) for row in res]
+    except Exception as e:
+        logger.warning(f"PRAGMA optimize failed: {e}")
+        return []
 
 def get_system_session() -> Session:
     return Session(get_system_engine(), expire_on_commit=False)

@@ -61,6 +61,15 @@ class TestSQLiteBackend(unittest.TestCase):
             self.assertEqual(str(journal_mode).lower(), "wal")
             self.assertEqual(int(busy_timeout), 5000)
 
+    def test_sqlite_optimize(self):
+        from core.database import optimize_db, get_engine_for_book
+        engine = get_engine_for_book(self.book_dir)
+        res = optimize_db(engine)
+        self.assertIsInstance(res, list)
+
+        repo_res = self.repo.optimize()
+        self.assertIsInstance(repo_res, list)
+
     def test_fastapi_app_endpoints(self):
         app = create_app()
         client = TestClient(app)

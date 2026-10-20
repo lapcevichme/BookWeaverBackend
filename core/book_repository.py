@@ -195,6 +195,11 @@ class BookRepository:
                 session.commit()
         return size
 
+    def optimize(self) -> List[str]:
+        """Запускает оптимизацию планировщика запросов SQLite для базы книги."""
+        from core.database import optimize_db, get_engine_for_book
+        return optimize_db(get_engine_for_book(self.book_output_dir))
+
     def load_manifest(self) -> BookManifest:
         book = self.get_book()
         if not book:

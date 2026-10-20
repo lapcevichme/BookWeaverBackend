@@ -119,6 +119,13 @@ def prune_tasks(
             session.exec(delete(TaskRecord).where(TaskRecord.id.in_(batch)))
         session.commit()
 
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("PRAGMA optimize;"))
+                conn.commit()
+        except Exception:
+            pass
+
         logger.info(f"🧹 Pruned {len(ids_to_delete)} old tasks from tasks.db")
         return len(ids_to_delete)
 
@@ -141,6 +148,7 @@ def init_tasks_db():
                         conn.execute(text(f"DROP TABLE \"{gt}\""))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_taskrecord_status_created_at ON taskrecord (status, created_at)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS ix_taskrecord_created_at ON taskrecord (created_at)"))
+            conn.execute(text("PRAGMA optimize;"))
             conn.commit()
     except Exception as e:
         logger.warning(f"Failed to clean ghost tables or create indexes in tasks.db: {e}")
