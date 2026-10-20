@@ -145,6 +145,35 @@ class TestRepository(unittest.TestCase):
             summary = session.get(ChapterSummary, "vol_1_chap_1")
             self.assertIsNone(summary)
 
+    def test_mutable_json_in_place_updates(self):
+        chars = self.repo.get_characters()
+        alice = next(c for c in chars if c.name == "Alice")
+
+        # In-place мутации списков и словарей в JSON
+        with self.repo.get_session() as session:
+            db_alice = session.get(Character, alice.id)
+            db_alice.aliases.append("Ali")
+            db_alice.chapter_mentions["vol_1_chap_1"] = "Main hero action"
+            session.commit()
+
+        # Проверяем в новой сессии, что изменения применились на диске
+        with self.repo.get_session() as session:
+            db_alice = session.get(Character, alice.id)
+            self.assertIn("Ali", db_alice.aliases)
+            self.assertEqual(db_alice.chapter_mentions.get("vol_1_chap_1"), "Main hero action")
+
+        # In-place мутации в Book.tags и Book.config
+        with self.repo.get_session() as session:
+            db_book = session.get(Book, self.book_id)
+            db_book.tags.append("fantasy")
+            db_book.config["tts_engine"] = "cosyvoice"
+            session.commit()
+
+        with self.repo.get_session() as session:
+            db_book = session.get(Book, self.book_id)
+            self.assertIn("fantasy", db_book.tags)
+            self.assertEqual(db_book.config.get("tts_engine"), "cosyvoice")
+
     def test_system_models(self):
         engine = init_system_db()
         self.assertIsNotNone(engine)

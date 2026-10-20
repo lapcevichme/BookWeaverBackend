@@ -11,6 +11,7 @@ from enum import Enum
 from pydantic import model_validator, ValidationError, BaseModel as PydanticBaseModel, ConfigDict
 from sqlmodel import SQLModel, Field, Relationship, Column, JSON
 from sqlalchemy import Text, Index, UniqueConstraint, ForeignKey, String
+from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import reconstructor
 
 # --- Enums ---
@@ -85,8 +86,8 @@ class Book(SQLModel, table=True):
     total_duration_ms: int = Field(default=0)
     storage_size_bytes: int = Field(default=0)
     language: str = Field(default="ru")
-    tags: List[str] = Field(default_factory=list, sa_column=Column(JSON))
-    config: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    tags: List[str] = Field(default_factory=list, sa_column=Column(MutableList.as_mutable(JSON)))
+    config: Dict[str, Any] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
     
     # Relationships
     chapters: List["Chapter"] = Relationship(back_populates="book")
@@ -157,9 +158,9 @@ class ChapterCache(SQLModel, table=True):
     chapter_id: str = Field(
         sa_column=Column(String, ForeignKey("chapter.id", ondelete="CASCADE"), primary_key=True)
     )
-    raw_scenario: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
-    ambient: Optional[List] = Field(default=None, sa_column=Column(JSON))
-    emotion: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    raw_scenario: Optional[Dict] = Field(default=None, sa_column=Column(MutableDict.as_mutable(JSON)))
+    ambient: Optional[List] = Field(default=None, sa_column=Column(MutableList.as_mutable(JSON)))
+    emotion: Optional[Dict] = Field(default=None, sa_column=Column(MutableDict.as_mutable(JSON)))
     
     # Relationships
     chapter: Optional["Chapter"] = Relationship(back_populates="cache")
@@ -189,18 +190,18 @@ class Character(SQLModel, table=True):
     
     name: str = Field(..., index=True)
     entity_type: CharacterType = Field(default=CharacterType.PERSON)
-    aliases: List[str] = Field(default_factory=list, sa_column=Column(JSON))
+    aliases: List[str] = Field(default_factory=list, sa_column=Column(MutableList.as_mutable(JSON)))
     gender: Optional[CharacterGender] = Field(default=None, sa_column=Column(String, nullable=True))
     role_tier: RoleTier = Field(default=RoleTier.BACKGROUND, sa_column=Column(String, default=RoleTier.BACKGROUND))
     spoiler_free_description: str = Field(..., sa_column=Column(Text))
     description: str = Field(..., sa_column=Column(Text))
     visual_base: Optional[str] = Field(None)
     voice_base: str = Field(default="")
-    embedding: Optional[List[float]] = Field(default=None, sa_column=Column(JSON))
+    embedding: Optional[List[float]] = Field(default=None, sa_column=Column(MutableList.as_mutable(JSON)))
     
-    voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(JSON))
-    visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict, sa_column=Column(JSON))
-    chapter_mentions: Dict[str, str] = Field(default_factory=dict, sa_column=Column(JSON))
+    voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
+    visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
+    chapter_mentions: Dict[str, str] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
     
     # Relationships
     book: "Book" = Relationship(back_populates="characters")
@@ -246,7 +247,7 @@ class ScenarioEntry(SQLModel, table=True):
     ambient: str = Field(default="none")
     sfx: Optional[str] = None
     audio_file: Optional[str] = None
-    audio_subtitles: Optional[Dict] = Field(default=None, sa_column=Column(JSON))
+    audio_subtitles: Optional[Dict] = Field(default=None, sa_column=Column(MutableDict.as_mutable(JSON)))
     src: Optional[str] = None
     order_index: int = Field(default=0)
     
