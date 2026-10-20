@@ -186,6 +186,42 @@ class TestRepository(unittest.TestCase):
             self.assertIsNotNone(fetched)
             self.assertEqual(fetched.value, "test_val")
 
+    def test_dto_separation(self):
+        from pydantic import BaseModel
+        from sqlmodel import SQLModel
+        from core.data_models import (
+            CharacterPatch, CharacterPatchList, RawScenario, RawScenarioEntry,
+            SoundDesignResult, SoundDesignItem, EmotionMap, VoiceDirection,
+            VolumeSummary, BookManifest, CharacterType, RoleTier, CharacterGender
+        )
+
+        dtos = [
+            CharacterPatch, CharacterPatchList, RawScenario, RawScenarioEntry,
+            SoundDesignResult, SoundDesignItem, EmotionMap, VoiceDirection,
+            VolumeSummary, BookManifest
+        ]
+        for dto in dtos:
+            self.assertTrue(issubclass(dto, BaseModel), f"{dto} must be Pydantic BaseModel")
+            self.assertFalse(issubclass(dto, SQLModel), f"{dto} must NOT be SQLModel")
+
+        # Проверяем валидаторы CharacterPatch
+        patch = CharacterPatch(
+            name="Боб",
+            entity_type="PERSON",  # Проверка приведения к нижнему регистру
+            role_tier="PROTAGONIST",
+            gender="MALE"
+        )
+        self.assertEqual(patch.entity_type, CharacterType.PERSON)
+        self.assertEqual(patch.role_tier, RoleTier.PROTAGONIST)
+        self.assertEqual(patch.gender, CharacterGender.MALE)
+
+        # Проверяем валидаторы EmotionMap (оборачивание словаря)
+        from uuid import uuid4
+        uid = uuid4()
+        emo_map = EmotionMap.model_validate({uid: {"instruct": "whisper", "tts_text": "тихо"}})
+        self.assertIn(uid, emo_map.emotions)
+        self.assertEqual(emo_map.emotions[uid].instruct, "whisper")
+
 
 if __name__ == "__main__":
     unittest.main()

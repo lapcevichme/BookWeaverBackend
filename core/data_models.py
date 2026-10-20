@@ -176,7 +176,7 @@ class ChapterSummary(SQLModel, table=True):
     # Relationships
     chapter: "Chapter" = Relationship(back_populates="summary")
 
-class VolumeSummary(SQLModel):
+class VolumeSummary(PydanticBaseModel):
     """Глобальный пересказ целого тома."""
     volume_num: int
     summary: str = Field(description="Сжатый пересказ событий всего тома.")
@@ -255,13 +255,13 @@ class ScenarioEntry(SQLModel, table=True):
     chapter: "Chapter" = Relationship(back_populates="entries")
     speaker: Optional["Character"] = Relationship(back_populates="scenario_entries")
 
-# --- Non-Table Models (Prompts/API) ---
+# --- Non-Table Models (Prompts/API DTOs) ---
 
-class CharacterReconResult(SQLModel):
+class CharacterReconResult(PydanticBaseModel):
     mentioned_existing_character_ids: List[UUID] = Field(default_factory=list)
     newly_discovered_names: List[str] = Field(default_factory=list)
 
-class CharacterPatch(SQLModel):
+class CharacterPatch(PydanticBaseModel):
     id: Optional[UUID] = None
     entity_type: Optional[CharacterType] = None
     naming_reasoning: Optional[str] = None
@@ -289,38 +289,38 @@ class CharacterPatch(SQLModel):
                 data['gender'] = data['gender'].lower()
         return data
 
-class CharacterPatchList(SQLModel):
+class CharacterPatchList(PydanticBaseModel):
     patches: List[CharacterPatch]
 
-class RawChapterSummary(SQLModel):
+class RawChapterSummary(PydanticBaseModel):
     teaser: str = Field(...)
     synopsis: str = Field(...)
 
-class RawScenarioEntry(SQLModel):
+class RawScenarioEntry(PydanticBaseModel):
     id: UUID = Field(default_factory=uuid4)
     type: ScenarioEntryType
     speaker: Optional[str] = None
     text: Optional[str] = None
     src: Optional[str] = None
 
-class RawScenario(SQLModel):
+class RawScenario(PydanticBaseModel):
     scenario: List[RawScenarioEntry]
 
-class LlmRawScenarioEntry(SQLModel):
+class LlmRawScenarioEntry(PydanticBaseModel):
     type: ScenarioEntryType
     speaker: Optional[str] = None
     text: Optional[str] = None
     src: Optional[str] = None
 
-class LlmRawScenario(SQLModel):
+class LlmRawScenario(PydanticBaseModel):
     scenario: List[LlmRawScenarioEntry]
 
-class SoundDesignItem(SQLModel):
+class SoundDesignItem(PydanticBaseModel):
     entry_id: str = Field(...)
     ambient: Optional[str] = None
     sfx: Optional[str] = None
 
-class SoundDesignResult(SQLModel):
+class SoundDesignResult(PydanticBaseModel):
     design: List[SoundDesignItem] = Field(default_factory=list)
 
     @model_validator(mode="before")
@@ -337,11 +337,11 @@ class SoundDesignResult(SQLModel):
                 return {"design": items}
         return data
 
-class VoiceDirection(SQLModel):
+class VoiceDirection(PydanticBaseModel):
     instruct: str = Field(...)
     tts_text: Optional[str] = None
 
-class EmotionMap(SQLModel):
+class EmotionMap(PydanticBaseModel):
     emotions: Dict[UUID, VoiceDirection] = Field(default_factory=dict)
 
     @model_validator(mode="before")
@@ -353,15 +353,20 @@ class EmotionMap(SQLModel):
         return data
 
 # Legacy Containers (Keep only definitions for type safety, remove logic)
-class ChapterSummaryArchive(SQLModel):
+class ChapterSummaryArchive(PydanticBaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     summaries: Dict[str, ChapterSummary] = Field(default_factory=dict)
-class CharacterArchive(SQLModel):
+
+class CharacterArchive(PydanticBaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     characters: List[Character]
     processed_chapters: List[str] = Field(default_factory=list)
-class Scenario(SQLModel):
+
+class Scenario(PydanticBaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
     entries: List[ScenarioEntry]
 
-class ManifestMeta(SQLModel):
+class ManifestMeta(PydanticBaseModel):
     title: str = "Без названия"
     author: Optional[str] = "Неизвестный автор"
     description: Optional[str] = ""
@@ -373,7 +378,7 @@ class ManifestMeta(SQLModel):
     cover_image: Optional[str] = None
     language: str = "ru"
 
-class ManifestChapterEntry(SQLModel):
+class ManifestChapterEntry(PydanticBaseModel):
     order: int
     title: str
     vol: int = 1
@@ -381,12 +386,12 @@ class ManifestChapterEntry(SQLModel):
     status: ChapterStatus = ChapterStatus.DRAFT
     id: Optional[str] = None
 
-class ManifestConfig(SQLModel):
+class ManifestConfig(PydanticBaseModel):
     default_narrator_voice: str = "narrator_default"
     character_voices: Dict[UUID, str] = Field(default_factory=dict)
     last_run_log: Optional[str] = None
 
-class BookManifest(SQLModel):
+class BookManifest(PydanticBaseModel):
     project_id: str
     meta: ManifestMeta
     structure: List[ManifestChapterEntry] = Field(default_factory=list)
