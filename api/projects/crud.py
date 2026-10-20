@@ -10,7 +10,7 @@ from pydantic import BaseModel
 import config
 from core.book_repository import BookRepository
 from core import path_manager
-from core.data_models import Book, Chapter
+from core.data_models import Book, Chapter, ChapterStatus
 from api.models import UpdateBookRequest, ProjectDetailsResponse, MessageResponse, ImportProjectResponse
 from utils.book_converter import BookConverter
 from utils.exporter import BookExporter
@@ -57,12 +57,12 @@ async def get_project_details(book_name: str):
             "has_audio": has_audio
         })
 
-        return {
-            "book_id": book.id,
-            "title": book.title,
-            "author": book.author,
-            "chapters": chapters_status
-        }
+    return {
+        "book_id": book.id,
+        "title": book.title,
+        "author": book.author,
+        "chapters": chapters_status
+    }
 
 
 @router.patch("/{book_name}", response_model=Book)
@@ -87,8 +87,11 @@ async def update_project_metadata(book_name: str, req: UpdateBookRequest):
 @router.delete("/{book_name}", response_model=MessageResponse)
 async def delete_project(book_name: str):
     """Полностью удаляет проект (БД, вывод и входные файлы)."""
+    from core.database import dispose_engine
     book_output_dir = path_manager.get_book_output_dir(book_name)
     book_input_dir = path_manager.get_book_dir(book_name)
+
+    dispose_engine(book_output_dir)
 
     if book_output_dir.exists():
         shutil.rmtree(book_output_dir)
@@ -190,7 +193,7 @@ async def update_project_structure(book_name: str, req: BookStructureUpdate):
                     chapter_num=item.chapter_num,
                     title=item.title,
                     order_index=idx,
-                    status="ongoing"
+                    status=ChapterStatus.DRAFT
                 )
                 session.add(new_chap)
 

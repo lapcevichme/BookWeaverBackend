@@ -27,6 +27,8 @@ class TestSQLiteBackend(unittest.TestCase):
             session.add(book)
             chap = Chapter(id="vol_1_chap_1", book_id=self.book_id, volume_num=1, chapter_num=1, title="Intro")
             session.add(chap)
+            chap2 = Chapter(id="vol_1_chap_2", book_id=self.book_id, volume_num=1, chapter_num=2, title="Chapter 2")
+            session.add(chap2)
             char = Character(book_id=self.book_id, name="Hero", description="Main character", spoiler_free_description="Hero")
             session.add(char)
             session.commit()
@@ -36,6 +38,8 @@ class TestSQLiteBackend(unittest.TestCase):
         self.repo.book_output_dir = self.book_dir
 
     def tearDown(self):
+        from core.database import dispose_engine
+        dispose_engine(self.book_dir)
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_book_repository_get_book(self):
@@ -46,8 +50,9 @@ class TestSQLiteBackend(unittest.TestCase):
 
     def test_book_repository_chapters_and_characters(self):
         chapters = self.repo.get_all_chapters()
-        self.assertEqual(len(chapters), 1)
+        self.assertEqual(len(chapters), 2)
         self.assertEqual(chapters[0].id, "vol_1_chap_1")
+        self.assertEqual(chapters[1].id, "vol_1_chap_2")
 
         characters = self.repo.get_characters()
         self.assertEqual(len(characters), 1)
@@ -83,6 +88,20 @@ class TestSQLiteBackend(unittest.TestCase):
 
         response = client.get("/api/v1/projects/")
         self.assertEqual(response.status_code, 200)
+
+        import config
+        orig_out = config.OUTPUT_DIR
+        try:
+            config.OUTPUT_DIR = self.temp_dir
+            res = client.get(f"/api/v1/projects/{self.book_id}")
+            self.assertEqual(res.status_code, 200)
+            data = res.json()
+            # Проверяем, что возвращены ВСЕ главы книги, а не одна
+            self.assertEqual(len(data["chapters"]), 2)
+            self.assertEqual(data["chapters"][0]["id"], "vol_1_chap_1")
+            self.assertEqual(data["chapters"][1]["id"], "vol_1_chap_2")
+        finally:
+            config.OUTPUT_DIR = orig_out
 
     def test_pywhispercpp_tts_service(self):
         import wave, struct, math

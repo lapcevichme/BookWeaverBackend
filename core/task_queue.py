@@ -238,13 +238,18 @@ class TaskWorker:
                     if p_task.status == TaskStatus.CANCELLED:
                         raise TaskCancelledException(f"Task {task.id} was cancelled by user.")
                     
-                    # 2. Обработка ПАУЗЫ (блокируем выполнение)
-                    while p_task.status == TaskStatus.PAUSED:
-                        time.sleep(1)
-                        p_session.rollback() # Сбрасываем кэш сессии, чтобы увидеть изменения в БД
-                        p_task = p_session.get(TaskRecord, task.id)
-                        if not p_task or p_task.status == TaskStatus.CANCELLED:
-                            raise TaskCancelledException(f"Task {task.id} was cancelled during pause.")
+                    # 2. Обработка ПАУЗЫ (блокируем выполнение без удержания долгой транзакции)
+                    if p_task.status == TaskStatus.PAUSED:
+                        p_session.rollback()
+                        while True:
+                            time.sleep(1)
+                            with Session(engine) as check_session:
+                                chk = check_session.get(TaskRecord, task.id)
+                                if not chk or chk.status == TaskStatus.CANCELLED:
+                                    raise TaskCancelledException(f"Task {task.id} was cancelled during pause.")
+                                if chk.status != TaskStatus.PAUSED:
+                                    p_task = p_session.get(TaskRecord, task.id)
+                                    break
 
                     # 3. Обычное обновление прогресса
                     p_task.progress = p

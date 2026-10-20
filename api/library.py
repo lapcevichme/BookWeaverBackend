@@ -201,17 +201,12 @@ async def upload_ambient(
         raise HTTPException(status_code=500, detail=f"Не удалось сохранить аудиофайл: {e}")
 
     with get_system_session() as session:
-        existing = session.get(AmbientTrack, meta_obj.id)
-        if existing:
-            session.delete(existing)
-            session.commit()
-            
         new_track = AmbientTrack(
             id=meta_obj.id,
             description=meta_obj.description,
             tags=meta_obj.tags
         )
-        session.add(new_track)
+        session.merge(new_track)
         session.commit()
 
     return JSONResponse(status_code=201, content={
