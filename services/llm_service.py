@@ -76,7 +76,7 @@ class LLMService:
         error_msg = None
 
         try:
-            response_text, usage = self._raw_call_llm(prompt)
+            response_text, usage = self._raw_call_llm(prompt, prompt_type)
             if not response_text:
                 status = "api_error"
             else:
@@ -122,10 +122,24 @@ class LLMService:
             logger.warning(f"Не удалось сохранить сырой ответ: {e}")
 
     @staticmethod
-    def _openrouter_reasoning() -> Optional[dict]:
-        """Настройка reasoning на OpenRouter: '' (по умолчанию модели), 'none', 'low', 'medium', 'high'."""
+    def _openrouter_reasoning(prompt_type: str = "unknown") -> Optional[dict]:
+        """
+        Настройка reasoning на OpenRouter: '' (по умолчанию модели), 'none', 'low', 'medium', 'high'.
+        openrouter_reasoning_by_stage ({"sound_design": "none", ...}) переопределяет
+        общую настройку openrouter_reasoning_effort для конкретного prompt_type.
+        """
         import config
-        effort = (getattr(config, "OPENROUTER_REASONING_EFFORT", "") or "").strip().lower()
+        by_stage = getattr(config, "OPENROUTER_REASONING_BY_STAGE", None) or {}
+        if isinstance(by_stage, str):
+            try:
+                by_stage = json.loads(by_stage) if by_stage.strip() else {}
+            except json.JSONDecodeError:
+                logger.warning(f"openrouter_reasoning_by_stage не является JSON: {by_stage!r}")
+                by_stage = {}
+        effort = by_stage.get(prompt_type)
+        if effort is None:
+            effort = getattr(config, "OPENROUTER_REASONING_EFFORT", "")
+        effort = (effort or "").strip().lower()
         if not effort:
             return None
         if effort == "none":
@@ -147,7 +161,7 @@ class LLMService:
             return None
         return {"order": order, "allow_fallbacks": False}
 
-    def _raw_call_llm(self, prompt: str) -> Tuple[Optional[str], Tuple[int, int]]:
+    def _raw_call_llm(self, prompt: str, prompt_type: str = "unknown") -> Tuple[Optional[str], Tuple[int, int]]:
         max_retries = 3
         for attempt in range(max_retries):
             if attempt > 0:
@@ -165,7 +179,7 @@ class LLMService:
                     routing = self._openrouter_routing()
                     if routing:
                         extra["provider"] = routing
-                    reasoning = self._openrouter_reasoning()
+                    reasoning = self._openrouter_reasoning(prompt_type)
                     if reasoning:
                         extra["reasoning"] = reasoning
                     if extra:
@@ -182,7 +196,7 @@ class LLMService:
                     real_cost = getattr(completion.usage, "cost", None)
                     self._track_usage(*usage, real_cost=real_cost)
                     logger.info(
-                        f"LLM usage [{self.model_name} @ {getattr(completion, 'provider', '?')}]: "
+                        f"LLM usage [{prompt_type} | {self.model_name} @ {getattr(completion, 'provider', '?')}]: "
                         f"in={usage[0]} (cached={cached}), out={usage[1]} (reasoning={reasoning_toks}), cost=${real_cost if real_cost is not None else '?'}"
                     )
 

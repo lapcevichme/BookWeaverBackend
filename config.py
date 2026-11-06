@@ -47,6 +47,9 @@ _FAST_MODEL_NAME_DEFAULT = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
 _POWERFUL_MODEL_NAME_DEFAULT = os.environ.get("POWERFUL_MODEL_NAME", "gemma-3-27b-it")
 _OPENROUTER_PROVIDER_ORDER_DEFAULT = os.environ.get("OPENROUTER_PROVIDER_ORDER", "")
 _OPENROUTER_REASONING_EFFORT_DEFAULT = os.environ.get("OPENROUTER_REASONING_EFFORT", "")
+_OPENROUTER_REASONING_BY_STAGE_DEFAULT = os.environ.get("OPENROUTER_REASONING_BY_STAGE", "")  # JSON: {"sound_design": "none"}
+_SCENARIO_MIN_COVERAGE_DEFAULT = 0.90
+_SCENARIO_MAX_ATTEMPTS_DEFAULT = 3
 _SCENARIO_CHUNK_SIZE_DEFAULT = 40_000
 
 # Temp Defaults
@@ -145,6 +148,12 @@ def __getattr__(name: str):
         return _get_db_setting("openrouter_provider_order", _OPENROUTER_PROVIDER_ORDER_DEFAULT)
     elif name == "OPENROUTER_REASONING_EFFORT":
         return _get_db_setting("openrouter_reasoning_effort", _OPENROUTER_REASONING_EFFORT_DEFAULT)
+    elif name == "OPENROUTER_REASONING_BY_STAGE":
+        return _get_db_setting("openrouter_reasoning_by_stage", _OPENROUTER_REASONING_BY_STAGE_DEFAULT)
+    elif name == "SCENARIO_MIN_COVERAGE":
+        return float(_get_db_setting("scenario_min_coverage", _SCENARIO_MIN_COVERAGE_DEFAULT))
+    elif name == "SCENARIO_MAX_ATTEMPTS":
+        return int(_get_db_setting("scenario_max_attempts", _SCENARIO_MAX_ATTEMPTS_DEFAULT))
     elif name == "SCENARIO_CHUNK_SIZE":
         return int(_get_db_setting("chunk_size", _SCENARIO_CHUNK_SIZE_DEFAULT))
     elif name == "ANALYZER_LLM_TEMPERATURE":
