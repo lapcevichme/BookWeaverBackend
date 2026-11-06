@@ -243,10 +243,13 @@ def format_scenario_generation_prompt(
         character_archive: CharacterArchive,
         chapter_summary: Optional[str] = None,
         chunk_index: int = 0,
-        total_chunks: int = 1
+        total_chunks: int = 1,
+        previous_context: str = ""
 ) -> str:
     """
     Формирует промпт для генерации "сырого" сценария главы (или её части).
+    Порядок блоков: сначала статичные правила (одинаковые для всех вызовов — попадают
+    в кэш провайдера), затем данные книги, в самом конце текст текущего чанка.
     """
     schema_description = generate_human_schema(LlmRawScenario)
 
@@ -273,6 +276,16 @@ def format_scenario_generation_prompt(
 </chunk_info>
 """
 
+    previous_block = ""
+    if previous_context:
+        previous_block = f"""
+<previous_context>
+Конец предыдущей части главы — ТОЛЬКО для понимания, кто говорит и что происходит.
+НЕ включай этот текст в сценарий: он уже обработан.
+{previous_context}
+</previous_context>
+"""
+
     few_shot_example = """
 === ПРИМЕР ПРАВИЛЬНОГО ДРОБЛЕНИЯ (ОБЯЗАТЕЛЬНО К ИСПОЛНЕНИЮ) ===
 ИСХОДНЫЙ ТЕКСТ (Один абзац): 
@@ -296,10 +309,6 @@ def format_scenario_generation_prompt(
 ТЫ — ИИ-РЕЖИССЕР, который превращает текст книги в детализированный сценарий для визуальной аудио-новеллы.
 Твоя задача — прочитать текст и скрупулезно преобразовать его в список записей сценария внутри одного JSON-объекта `{{"scenario": [...]}}`.
 </role>
-{context_info}{summary_block}
-<character_profiles>
-{character_profiles_block}
-</character_profiles>
 
 <scenario_rules>
 1.  **Типы записей (`type`):**
@@ -337,6 +346,10 @@ def format_scenario_generation_prompt(
 {schema_description}
 </output_format>
 
+<character_profiles>
+{character_profiles_block}
+</character_profiles>
+{summary_block}{context_info}{previous_block}
 <text_to_process>
 {text_chunk}
 </text_to_process>

@@ -32,6 +32,7 @@ class LLMService:
         self.api_key = api_key
         self._client = None
         self._lock = Lock()
+        self._usage_lock = Lock()  # сервис вызывается из нескольких потоков (параллельные чанки)
 
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -54,10 +55,18 @@ class LLMService:
                         api_key = self.api_key or os.getenv("OPENROUTER_API_KEY")
                         base_url = "https://openrouter.ai/api/v1"
 
-                    self._client = OpenAI(base_url=base_url, api_key=api_key)
+                    import config
+                    # Повторы делаем сами в _raw_call_llm: встроенные повторы SDK (max_retries=2)
+                    # умножались на наши и могли оплатить один и тот же запрос несколько раз.
+                    self._client = OpenAI(base_url=base_url, api_key=api_key,
+                                          timeout=config.LLM_REQUEST_TIMEOUT, max_retries=0)
         return self._client
 
     def _track_usage(self, input_tokens: int, output_tokens: int, real_cost: Optional[float] = None):
+        with self._usage_lock:
+            self._track_usage_unlocked(input_tokens, output_tokens, real_cost)
+
+    def _track_usage_unlocked(self, input_tokens: int, output_tokens: int, real_cost: Optional[float] = None):
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
         if real_cost is not None:
@@ -203,8 +212,20 @@ class LLMService:
                 content = completion.choices[0].message.content if completion.choices else None
                 return content, usage
             except Exception as e:
-                logger.warning(f"LLM API Call attempt {attempt + 1} failed: {e}")
-                time.sleep(2)
+                from openai import RateLimitError, APITimeoutError
+                if isinstance(e, RateLimitError):
+                    delay = min(60, 5 * 2 ** attempt)
+                    logger.warning(f"LLM 429 (rate limit), попытка {attempt + 1}/{max_retries}. Жду {delay} с.")
+                elif isinstance(e, APITimeoutError):
+                    delay = 2
+                    logger.warning(
+                        f"LLM таймаут, попытка {attempt + 1}/{max_retries}. Провайдер мог успеть "
+                        f"обработать и оплатить запрос; повторяю."
+                    )
+                else:
+                    delay = 2
+                    logger.warning(f"LLM API Call attempt {attempt + 1} failed: {e}")
+                time.sleep(delay)
         return None, (0, 0)
 
     @staticmethod

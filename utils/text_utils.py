@@ -1,7 +1,8 @@
 import json
 import re
 from pathlib import Path
-from typing import List
+import math
+from typing import List, Tuple
 
 
 def clean_raw_text(content: str) -> str:
@@ -66,6 +67,11 @@ def preprocess_text_for_tts(text: str, dictionary: dict) -> str:
 
 def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> List[str]:
     """
+    УСТАРЕЛО: используйте split_text_for_llm.
+    Ищет абзацы по пустым строкам, но в raw_text абзацы разделены одиночным \n,
+    поэтому на практике вся глава режется ровно по chunk_size посреди предложения.
+    Оставлено для сравнения в экспериментах.
+
     Разбивает текст на чанки, стараясь не разрывать абзацы.
 
     Args:
@@ -118,3 +124,76 @@ def smart_split_text(text: str, chunk_size: int = 10000, overlap: int = 300) -> 
         chunks.append("\n\n".join(current_chunk))
 
     return chunks
+
+_SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?…])["»”)]*\s+')
+
+
+def _split_long_line(line: str, chunk_size: int) -> List[str]:
+    """Режет слишком длинную строку по границам предложений (одно предложение не режется)."""
+    parts, buf = [], ""
+    for sentence in _SENTENCE_BOUNDARY.split(line):
+        if buf and len(buf) + 1 + len(sentence) > chunk_size:
+            parts.append(buf)
+            buf = sentence
+        else:
+            buf = f"{buf} {sentence}" if buf else sentence
+    if buf:
+        parts.append(buf)
+    return parts
+
+
+def _context_tail(chunk: str, context_chars: int) -> str:
+    """Хвост чанка для контекста, начинающийся с границы строки или предложения."""
+    if context_chars <= 0 or not chunk:
+        return ""
+    tail = chunk[-context_chars:]
+    if len(tail) == len(chunk):
+        return tail.strip()
+    newline = tail.find("\n")
+    if newline != -1:
+        return tail[newline + 1:].strip()
+    match = _SENTENCE_BOUNDARY.search(tail)
+    return tail[match.end():].strip() if match else tail.strip()
+
+
+def split_text_for_llm(text: str, chunk_size: int = 15000, context_chars: int = 600) -> List[Tuple[str, str]]:
+    """
+    Делит главу на чанки для LLM, не разрывая строки (абзацы) и предложения.
+
+    - Единица деления — строка (в raw_text абзацы разделены одиночным \n).
+      Строки длиннее chunk_size режутся по границам предложений.
+    - Чанки выравниваются по размеру: глава на 43k при chunk_size=15k дает три
+      чанка по ~14k, а не 15k + 15k + 13k или, хуже, 15k + 15k + 300.
+    - Возвращает пары (previous_context, chunk_text). previous_context — хвост
+      предыдущего чанка: его передают модели отдельно, как справку, а не как
+      часть текста, иначе он попадет в сценарий дважды.
+    """
+    if not text:
+        return []
+    if len(text) <= chunk_size:
+        return [("", text)]
+
+    units: List[str] = []
+    for line in text.split("\n"):
+        units.extend([line] if len(line) <= chunk_size else _split_long_line(line, chunk_size))
+
+    target = len(text) / math.ceil(len(text) / chunk_size)
+    chunks: List[str] = []
+    current: List[str] = []
+    current_len = 0
+    for unit in units:
+        added = len(unit) + (1 if current else 0)
+        if current and (current_len + added > chunk_size or current_len >= target):
+            chunks.append("\n".join(current))
+            current, current_len = [unit], len(unit)
+        else:
+            current.append(unit)
+            current_len += added
+    if current:
+        chunks.append("\n".join(current))
+
+    result = []
+    for i, chunk in enumerate(chunks):
+        context = _context_tail(chunks[i - 1], context_chars) if i > 0 else ""
+        result.append((context, chunk))
+    return result

@@ -22,7 +22,7 @@ from pipelines import prompts
 from services.model_manager import ModelManager
 from utils.metrics import metrics_collector
 from utils.prompt_utils import generate_human_schema
-from utils.text_utils import smart_split_text
+from utils.text_utils import split_text_for_llm
 
 logger = logging.getLogger(__name__)
 
@@ -169,6 +169,41 @@ class ScenarioGenerationPipeline:
             logger.error(f"❌ Error: {e}", exc_info=True)
             raise e
 
+    def _generate_chunk(self, llm, prompt: str, chunk_text: str, i: int) -> Optional[RawScenario]:
+        """Генерирует один чанк с повторами по покрытию текста. Возвращает лучший вариант или None."""
+        min_coverage = config.SCENARIO_MIN_COVERAGE
+        max_attempts = max(1, config.SCENARIO_MAX_ATTEMPTS)
+        best_result, best_coverage = None, -1.0
+
+        for attempt in range(1, max_attempts + 1):
+            chunk_result = llm.call_for_pydantic(RawScenario, prompt, prompt_type="scenario_generation")
+            if not chunk_result or not chunk_result.scenario:
+                logger.warning(f"Часть {i + 1}, попытка {attempt}/{max_attempts}: пустой или невалидный ответ.")
+                continue
+            coverage = self._text_coverage(chunk_result, chunk_text)
+            logger.info(f"Часть {i + 1}, попытка {attempt}/{max_attempts}: {len(chunk_result.scenario)} строк, покрытие текста {coverage:.0%}.")
+            if coverage > best_coverage:
+                best_result, best_coverage = chunk_result, coverage
+            if coverage >= min_coverage:
+                break
+            metrics_collector.increment("scenario_low_coverage_retries")
+
+        if best_result is None:
+            logger.error(f"❌ Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
+            return None
+        if best_coverage < min_coverage:
+            logger.error(
+                f"❌ Часть {i + 1}: покрытие {best_coverage:.0%} ниже порога {min_coverage:.0%} "
+                f"после {max_attempts} попыток. Сохраняю лучший вариант, но сценарий НЕПОЛНЫЙ."
+            )
+            metrics_collector.increment("scenario_incomplete_chunks")
+        return best_result
+
+    @staticmethod
+    def _split_chapter(full_text: str, chunk_size: int):
+        """Пары (previous_context, chunk_text). Вынесено отдельно, чтобы стратегию можно было подменить в экспериментах."""
+        return split_text_for_llm(full_text, chunk_size=chunk_size, context_chars=600)
+
     @staticmethod
     def _text_coverage(result: RawScenario, source_text: str) -> float:
         """
@@ -199,57 +234,55 @@ class ScenarioGenerationPipeline:
         chapter_data = summary_archive.summaries.get(chapter_id)
         synopsis = chapter_data.synopsis if chapter_data else None
 
-        chunk_size = getattr(config, 'SCENARIO_CHUNK_SIZE', 10000)
+        chunk_size = config.SCENARIO_CHUNK_SIZE
 
         logger.info(f"Используется размер чанка: {chunk_size} символов")
 
-        chunks = smart_split_text(full_text, chunk_size=chunk_size, overlap=300)
+        chunks = self._split_chapter(full_text, chunk_size)
         total_chunks = len(chunks)
-
-        all_entries: List[RawScenarioEntry] = []
 
         logger.info(f"Текст главы разбит на {total_chunks} частей.")
 
-        for i, chunk_text in enumerate(chunks):
-            if progress_callback:
-                current_progress = 0.2 + (0.3 * (i / total_chunks))
-                progress_callback(current_progress, "Генерация", f"Обработка части {i + 1} из {total_chunks}...")
-
-            prompt = prompts.format_scenario_generation_prompt(
+        prompts_by_chunk = [
+            prompts.format_scenario_generation_prompt(
                 text_chunk=chunk_text,
                 character_archive=archive,
                 chapter_summary=synopsis,
                 chunk_index=i,
-                total_chunks=total_chunks
+                total_chunks=total_chunks,
+                previous_context=previous_context
             )
+            for i, (previous_context, chunk_text) in enumerate(chunks)
+        ]
 
-            min_coverage = config.SCENARIO_MIN_COVERAGE
-            max_attempts = max(1, config.SCENARIO_MAX_ATTEMPTS)
-            best_result, best_coverage = None, -1.0
+        # Чанки независимы (previous_context — хвост исходного текста, а не ответа модели),
+        # поэтому их можно генерировать параллельно. Порядок результатов сохраняется.
+        workers = max(1, min(config.SCENARIO_PARALLEL_CHUNKS, total_chunks))
+        results: List[Optional[RawScenario]] = [None] * total_chunks
+        if workers == 1:
+            for i, (_, chunk_text) in enumerate(chunks):
+                results[i] = self._generate_chunk(llm, prompts_by_chunk[i], chunk_text, i)
+        else:
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            logger.info(f"Параллельная генерация: {workers} потока(ов).")
+            done = 0
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = {
+                    pool.submit(self._generate_chunk, llm, prompts_by_chunk[i], chunk_text, i): i
+                    for i, (_, chunk_text) in enumerate(chunks)
+                }
+                for future in as_completed(futures):
+                    i = futures[future]
+                    results[i] = future.result()
+                    done += 1
+                    if progress_callback:
+                        progress_callback(0.2 + 0.3 * (done / total_chunks), "Генерация",
+                                          f"Готово частей: {done} из {total_chunks}")
 
-            for attempt in range(1, max_attempts + 1):
-                chunk_result = llm.call_for_pydantic(RawScenario, prompt, prompt_type="scenario_generation")
-                if not chunk_result or not chunk_result.scenario:
-                    logger.warning(f"Часть {i + 1}, попытка {attempt}/{max_attempts}: пустой или невалидный ответ.")
-                    continue
-                coverage = self._text_coverage(chunk_result, chunk_text)
-                logger.info(f"Часть {i + 1}, попытка {attempt}/{max_attempts}: {len(chunk_result.scenario)} строк, покрытие текста {coverage:.0%}.")
-                if coverage > best_coverage:
-                    best_result, best_coverage = chunk_result, coverage
-                if coverage >= min_coverage:
-                    break
-                metrics_collector.increment("scenario_low_coverage_retries")
-
-            if best_result is None:
-                logger.error(f"❌ Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
-                continue
-            if best_coverage < min_coverage:
-                logger.error(
-                    f"❌ Часть {i + 1}: покрытие {best_coverage:.0%} ниже порога {min_coverage:.0%} "
-                    f"после {max_attempts} попыток. Сохраняю лучший вариант, но сценарий НЕПОЛНЫЙ."
-                )
-                metrics_collector.increment("scenario_incomplete_chunks")
-            all_entries.extend(best_result.scenario)
+        all_entries: List[RawScenarioEntry] = []
+        for result in results:
+            if result:
+                all_entries.extend(result.scenario)
 
         if not all_entries:
             return None
