@@ -189,14 +189,16 @@ class ScenarioGenerationPipeline:
             metrics_collector.increment("scenario_low_coverage_retries")
 
         if best_result is None:
-            logger.error(f"❌ Ошибка генерации части {i + 1}! Пропускаем этот кусок.")
+            logger.error(f"❌ Часть {i + 1}: нет валидного ответа после {max_attempts} попыток.")
             return None
         if best_coverage < min_coverage:
+            # Неполный сценарий выглядит готовым и уходит в озвучку, поэтому не сохраняем его.
             logger.error(
                 f"❌ Часть {i + 1}: покрытие {best_coverage:.0%} ниже порога {min_coverage:.0%} "
-                f"после {max_attempts} попыток. Сохраняю лучший вариант, но сценарий НЕПОЛНЫЙ."
+                f"после {max_attempts} попыток. Глава не будет сохранена."
             )
             metrics_collector.increment("scenario_incomplete_chunks")
+            return None
         return best_result
 
     @staticmethod
@@ -279,13 +281,14 @@ class ScenarioGenerationPipeline:
                         progress_callback(0.2 + 0.3 * (done / total_chunks), "Генерация",
                                           f"Готово частей: {done} из {total_chunks}")
 
+        lost = [i + 1 for i, r in enumerate(results) if r is None]
+        if lost:
+            # Склеивать сценарий без куска нельзя: в озвучке молча пропадет часть главы.
+            raise ValueError(f"Не сгенерированы части {lost} из {total_chunks} (нет ответа или низкое покрытие текста)")
+
         all_entries: List[RawScenarioEntry] = []
         for result in results:
-            if result:
-                all_entries.extend(result.scenario)
-
-        if not all_entries:
-            return None
+            all_entries.extend(result.scenario)
 
         return RawScenario(scenario=all_entries)
 
@@ -319,7 +322,8 @@ class ScenarioGenerationPipeline:
 
         result = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(SoundDesignResult, prompt, prompt_type="sound_design")
         if not result:
-            return entries
+            # Иначе в кэш ляжет сценарий без звука, и повторный запуск его уже не исправит.
+            raise ValueError("Звуковой дизайн: LLM не вернула валидный ответ")
 
         design_map = {item.entry_id: item for item in result.design}
         current_ambient = "none"
@@ -359,7 +363,7 @@ class ScenarioGenerationPipeline:
 
         emotion_map_data = self.model_manager.get_llm_service('character_analyzer').call_for_pydantic(EmotionMap, prompt, prompt_type="emotion_analysis")
         if not emotion_map_data:
-            return entries
+            raise ValueError("Анализ эмоций: LLM не вернула валидный ответ")
 
         entries_by_id = {str(entry['id']): entry for entry in entries}
 

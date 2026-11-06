@@ -7,6 +7,7 @@ from pathlib import Path
 from core.book_repository import BookRepository
 from core import path_manager
 from services.comfy_service import ComfyService
+from core.errors import PipelineIncompleteError, TaskCancelledException
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,7 @@ class ImageGenerationPipeline:
         update_progress(0.05, "Генерация", f"Найдено {total_tasks} задач. Режим: {quality.upper()}")
 
         generated_count = 0
+        failed = {}
         pony_quality_tags = "score_9, score_8_up, score_7_up, score_6_up, source_anime, "
         pony_negative = "ugly, bad quality, blurry, score_6, score_5, score_4"
         
@@ -108,9 +110,19 @@ class ImageGenerationPipeline:
                                 repo.save_characters(archive.characters)
                             break
                 else:
+                    failed[f"{char_name} ({task['chapter']})"] = "ComfyUI не вернул результат"
                     logger.warning(f"⚠️ Не удалось получить результат для {char_name}")
 
+            except TaskCancelledException:
+                raise
             except Exception as e:
+                failed[f"{char_name} ({task['chapter']})"] = str(e)[:200]
                 logger.error(f"❌ Ошибка при обработке {char_name}: {e}")
 
+        if generated_count < total_tasks:
+            if not failed:
+                failed["?"] = "изображение не сохранено"
+            raise PipelineIncompleteError("Иллюстрации", total_tasks, failed,
+                                          message=f"Иллюстрации: сгенерировано {generated_count} из {total_tasks}; "
+                                                  + "; ".join(f"{k}: {v}" for k, v in list(failed.items())[:5]))
         update_progress(1.0, "Завершено", f"Сгенерировано изображений: {generated_count} из {total_tasks}")

@@ -22,6 +22,7 @@ from pipelines.image_generation_pipeline import (ImageGenerationPipeline)
 
 from utils.book_converter import BookConverter
 from utils.exporter import BookExporter
+from core.errors import PipelineIncompleteError, TaskCancelledException
 
 logger = logging.getLogger(__name__)
 
@@ -80,21 +81,31 @@ class Application:
         
         total_stages = len(stages)
         current_stage_idx = 0
+        # Неполный этап не останавливает цикл (успешные главы полезны дальше),
+        # но итог обязан это показать. Любая другая ошибка останавливает цикл.
+        incomplete: list[PipelineIncompleteError] = []
+
+        def run_stage(fn, *args, **kwargs):
+            try:
+                fn(*args, **kwargs)
+            except PipelineIncompleteError as e:
+                logger.error(f"⚠️ {e}")
+                incomplete.append(e)
 
         if not skip_summary:
             current_stage_idx += 1
             update_progress((current_stage_idx - 1) / total_stages, "Summary", "Начало генерации пересказов...")
-            self.summary_pipeline.run(book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
+            run_stage(self.summary_pipeline.run, book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
 
         if not skip_chars:
             current_stage_idx += 1
             update_progress((current_stage_idx - 1) / total_stages, "Characters", "Начало анализа персонажей...")
-            self.character_pipeline.run(book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
+            run_stage(self.character_pipeline.run, book_name, max_chapters=max_chapters, progress_callback=lambda p, s, m: update_progress((current_stage_idx - 1 + p) / total_stages, s, m))
 
         if generate_images:
             current_stage_idx += 1
             update_progress((current_stage_idx - 1) / total_stages, "Images", "Начало генерации иллюстраций...")
-            self.image_pipeline.run(book_name=book_name)
+            run_stage(self.image_pipeline.run, book_name=book_name)
 
         if not skip_scenario:
             current_stage_idx += 1
@@ -108,6 +119,7 @@ class Application:
                 chapter_ids = chapter_ids[:max_chapters]
 
             total_chaps = len(chapter_ids)
+            failed_scenarios = {}
 
             for i, (vol, chap) in enumerate(chapter_ids, 1):
                 chap_progress = i / total_chaps
@@ -115,9 +127,20 @@ class Application:
                 update_progress((current_stage_idx - 1 + chap_progress) / total_stages, "Scenario", f"Глава {i}/{total_chaps}: {chapter_id}")
                 try:
                     self.scenario_pipeline.run(book_name=book_name, volume_num=vol, chapter_num=chap)
+                except TaskCancelledException:
+                    raise
                 except Exception as e:
+                    failed_scenarios[chapter_id] = str(e)[:200]
                     logger.error(f"Ошибка в главе {chapter_id}: {e}")
+            if failed_scenarios:
+                incomplete.append(PipelineIncompleteError("Сценарии", total_chaps, failed_scenarios))
 
+        if incomplete:
+            summary = " | ".join(str(e) for e in incomplete)
+            update_progress(1.0, "Ошибка", f"Полный цикл для '{book_name}' завершен НЕ полностью: {summary}")
+            raise PipelineIncompleteError("Полный цикл", sum(e.total for e in incomplete),
+                                          {f"{e.stage}/{ch}": r for e in incomplete for ch, r in e.failed.items()},
+                                          message=f"Полный цикл завершен НЕ полностью: {summary}")
         update_progress(1.0, "Завершено", f"Полный цикл для '{book_name}' успешно выполнен!")
 
     def export_book(self, book_name: str) -> Optional[Path]:

@@ -10,6 +10,7 @@ from core.book_repository import BookRepository
 from pipelines import prompts
 from services.model_manager import ModelManager
 from utils.metrics import metrics_collector
+from core.errors import PipelineIncompleteError, TaskCancelledException
 from sqlmodel import select
 
 logger = logging.getLogger(__name__)
@@ -39,13 +40,13 @@ class SummaryGenerationPipeline:
                 db_chapters = db_chapters[:max_chapters]
 
             if not db_chapters:
-                update_progress(1.0, "Ошибка", "В проекте не найдено глав.")
-                return
+                raise ValueError(f"В проекте '{book_name}' не найдено глав.")
 
             # --- ОБРАБОТКА ОТДЕЛЬНЫХ ГЛАВ ---
             total_chapters = len(db_chapters)
             stage = "Обработка глав"
             CONTEXT_WINDOW_SIZE = 3
+            failed = {}
 
             for i, chap in enumerate(db_chapters):
                 progress = 0.1 + (i / total_chapters) * 0.9
@@ -83,29 +84,37 @@ class SummaryGenerationPipeline:
 
                     raw_summary_result = llm_service.call_for_pydantic(RawChapterSummary, prompt, prompt_type="chapter_summary")
 
-                    if raw_summary_result:
-                        # Сохраняем в БД
-                        with repo.get_session() as session:
-                            db_summary = session.get(ChapterSummary, chapter_id)
-                            if not db_summary:
-                                db_summary = ChapterSummary(chapter_id=chapter_id, teaser="", synopsis="")
-                            
-                            db_summary.teaser = raw_summary_result.teaser
-                            db_summary.synopsis = raw_summary_result.synopsis
-                            
-                            session.add(db_summary)
-                            session.commit()
-                            
-                            # Обновляем локальный архив для следующей итерации
-                            summary_archive.summaries[chapter_id] = db_summary
+                    if not raw_summary_result:
+                        raise ValueError("LLM не вернула валидный пересказ")
+                    # Сохраняем в БД
+                    with repo.get_session() as session:
+                        db_summary = session.get(ChapterSummary, chapter_id)
+                        if not db_summary:
+                            db_summary = ChapterSummary(chapter_id=chapter_id, teaser="", synopsis="")
+                        
+                        db_summary.teaser = raw_summary_result.teaser
+                        db_summary.synopsis = raw_summary_result.synopsis
+                        
+                        session.add(db_summary)
+                        session.commit()
+                        
+                        # Обновляем локальный архив для следующей итерации
+                        summary_archive.summaries[chapter_id] = db_summary
 
                     metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
+                except TaskCancelledException:
+                    raise
                 except Exception as e:
+                    failed[chapter_id] = str(e)[:200]
                     logger.error(f"❌ Ошибка при обработке главы {chapter_id}: {e}")
 
+            if failed:
+                raise PipelineIncompleteError("Пересказы", total_chapters, failed)
             update_progress(1.0, "Завершено", "Все пересказы глав сгенерированы.")
 
+        except (PipelineIncompleteError, TaskCancelledException):
+            raise
         except Exception as e:
             logger.error(f"❌ Ошибка пайплайна пересказов: {e}", exc_info=True)
             raise

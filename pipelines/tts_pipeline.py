@@ -9,6 +9,7 @@ from core import path_manager
 from services.model_manager import ModelManager
 from utils import text_utils
 from utils.metrics import metrics_collector, AudioMetrics
+from core.errors import PipelineIncompleteError, TaskCancelledException
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,8 @@ class TTSPipeline:
                 update_progress(1.0, "Завершено", "Сценарий не содержит реплик для озвучивания.")
                 return
 
+            failed_entries = {}  # entry_id -> причина: такие реплики выпали бы из аудио молча
+
             for i, entry in enumerate(scenario_entries):
                 progress = 0.1 + (0.8 * (i / total_entries))
 
@@ -135,6 +138,7 @@ class TTSPipeline:
 
                 if not actual_voice_path.exists():
                     logger.error(f"❌ Аудиофайл для голоса '{voice_id}' не найден по пути {actual_voice_path}. Пропуск.")
+                    failed_entries[f"#{i + 1}"] = f"нет файла голоса '{voice_id}'"
                     continue
 
                 instruct_prompt = getattr(entry, 'instruct_prompt', 'neutral')
@@ -215,12 +219,19 @@ class TTSPipeline:
                         status="success" if success else "hallucination"
                     ))
                     metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
+                    if not success:
+                        reason = ("TTS не вернул аудио" if not wav_bytes
+                                  else f"галлюцинация TTS после {attempt} попыток (CER {last_cer:.2f})")
+                        failed_entries[f"#{i + 1}"] = reason
+                        logger.error(f"❌ Реплика {i + 1}/{total_entries} не озвучена: {reason}")
+                        continue
                 else:
                     try:
                         with sf.SoundFile(str(audio_path)) as f:
                             audio_duration_ms = int((f.frames / f.samplerate) * 1000)
-                    except Exception:
-                        audio_duration_ms = 0
+                    except Exception as e:
+                        failed_entries[f"#{i + 1}"] = f"битый аудиофайл: {e}"
+                        logger.error(f"❌ Реплика {i + 1}: не читается {audio_path}: {e}")
                         continue
 
                 # --- ВЫРАВНИВАНИЕ И СОХРАНЕНИЕ В БД ---
@@ -249,10 +260,19 @@ class TTSPipeline:
                     
                     total_duration_ms += audio_duration_ms
 
+            if failed_entries:
+                # Озвученные реплики сохранены; повторный запуск синтезирует только недостающие.
+                raise PipelineIncompleteError(f"Озвучка {chapter_id}", total_entries, failed_entries)
+
             from core.data_models import ChapterStatus
             repo.update_chapter_status(chapter_id, ChapterStatus.AUDIO_READY)
             update_progress(1.0, "Завершено", f"Глава озвучена! Длительность: {total_duration_ms / 1000:.1f} сек.")
 
+        except TaskCancelledException:
+            raise
+        except PipelineIncompleteError as e:
+            logger.error(f"⚠️ {e}")
+            raise
         except Exception as e:
             error_msg = f"❌ Критическая ошибка в TTS пайплайне: {e}"
             update_progress(1.0, "Ошибка", error_msg)

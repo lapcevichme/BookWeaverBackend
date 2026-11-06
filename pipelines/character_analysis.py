@@ -17,6 +17,7 @@ from core.data_models import (
 from services.model_manager import ModelManager
 from pipelines import prompts
 from utils.metrics import metrics_collector
+from core.errors import PipelineIncompleteError, TaskCancelledException
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class CharacterAnalysisPipeline:
             if progress_callback:
                 progress_callback(progress, stage, message)
 
+        self.stats = Counter()  # статистика за этот запуск, а не за жизнь процесса
         stage = "Подготовка"
         update_progress(0.0, stage, f"Запуск анализа персонажей для книги '{book_name}'")
 
@@ -61,14 +63,14 @@ class CharacterAnalysisPipeline:
                 db_chapters = db_chapters[:max_chapters]
 
             if not db_chapters:
-                update_progress(1.0, "Ошибка", "В базе данных проекта не найдено глав.")
-                return
+                raise ValueError(f"В проекте '{book_name}' не найдено глав.")
 
             master_archive = repo.get_character_archive()
             summary_archive = repo.get_summary_archive()
 
             total_chapters = len(db_chapters)
             stage = "Анализ глав"
+            failed = {}
 
             for idx, chap in enumerate(db_chapters):
                 progress = 0.1 + (idx / total_chapters) * 0.9
@@ -81,7 +83,8 @@ class CharacterAnalysisPipeline:
                 try:
                     chapter_text = repo.get_chapter_text(chapter_id)
                 except (FileNotFoundError, ValueError) as e:
-                    logger.warning(f"Пропуск главы {chapter_id}: {e}")
+                    failed[chapter_id] = f"нет текста главы: {e}"
+                    logger.error(f"❌ Пропуск главы {chapter_id}: {e}")
                     continue
 
                 if not chapter_text.strip():
@@ -97,8 +100,9 @@ class CharacterAnalysisPipeline:
                 recon_result = self._perform_recon(master_archive, chapter_text, chapter_summary_text)
 
                 if not recon_result:
-                    logger.warning(f"⚠️ Recon вернул None для главы {chapter_id}")
-                    self._mark_chapter_processed(master_archive, chapter_id)
+                    # Глава НЕ помечается обработанной: персонажи этой главы неизвестны.
+                    failed[chapter_id] = "разведка (recon) не вернула валидный ответ"
+                    logger.error(f"❌ Recon не удался для главы {chapter_id}")
                     continue
 
                 logger.info(f"🔍 Recon: Найдено известных: {len(recon_result.mentioned_existing_refs)}, новых имен: {len(recon_result.newly_discovered_names)}")
@@ -135,19 +139,27 @@ class CharacterAnalysisPipeline:
                                                     chapter_key, book_name)
                     elif patch_list is None:
                         self.stats["patch_call_failed"] += 1
+                        failed[chapter_id] = f"патч не удался (пачка {i // batch_size + 1})"
+                        logger.error(f"❌ Патч не удался: глава {chapter_id}, пачка {i // batch_size + 1}")
                     missing = [c.id for c in to_update if c.id not in patched]
                     if missing:
                         master_archive = self._add_empty_mentions(master_archive, missing, chapter_id)
 
-                self._mark_chapter_processed(master_archive, chapter_id)
-                
-                # СОХРАНЕНИЕ В БД
+                # Успешные пачки сохраняем даже при сбое другой пачки, но глава
+                # остается необработанной, чтобы это было видно и ее можно было перезапустить.
                 repo.save_characters(master_archive.characters)
-                repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
+                if chapter_id not in failed:
+                    self._mark_chapter_processed(master_archive, chapter_id)
+                    repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
                 metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
+            logger.info(f"📊 Статистика патча: {dict(self.stats)}")
+            if failed:
+                raise PipelineIncompleteError("Анализ персонажей", total_chapters, failed)
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")
 
+        except (PipelineIncompleteError, TaskCancelledException):
+            raise
         except Exception as e:
             logger.error(f"❌ Ошибка пайплайна: {e}", exc_info=True)
             raise

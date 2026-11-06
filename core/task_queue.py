@@ -31,9 +31,7 @@ class TaskType(str, Enum):
     GENERATE_IMAGES = "generate_images"
     FULL_CYCLE = "full_cycle"
 
-class TaskCancelledException(Exception):
-    """Исключение для прерывания задачи пользователем."""
-    pass
+from core.errors import TaskCancelledException  # noqa: E402,F401 - реэкспорт для старых импортов
 
 class TaskRecord(SQLModel, table=True):
     __table_args__ = (
