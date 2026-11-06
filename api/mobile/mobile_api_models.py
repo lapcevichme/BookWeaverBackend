@@ -73,6 +73,11 @@ class CharacterDetailsDto(BaseModel):
     spoiler_free_description: str
     aliases: List[str] = Field(default_factory=list)
     chapter_mentions: Dict[str, str] = Field(default_factory=dict)
+    as_of_chapter: Optional[str] = Field(
+        None, description="Если задан: description и chapter_mentions — на момент этой главы (без спойлеров)")
+    description_from_chapter: Optional[str] = Field(
+        None, description="Глава, из которой взята версия описания; null — первое описание персонажа")
+    first_chapter: Optional[str] = Field(None, description="Глава первого появления (только с as_of_chapter)")
 
 
 # /chapters/{id}/info

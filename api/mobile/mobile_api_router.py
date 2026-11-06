@@ -5,7 +5,7 @@ import socket
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 
 import config
@@ -14,6 +14,7 @@ from api.security import verify_token
 from core.book_repository import BookRepository
 from core.data_models import Chapter, ChapterSummary
 from core import path_manager
+from core.character_view import chapter_order, character_as_of
 from utils.audio_merger import merge_chapter_audio, ranged_file_response
 
 from api.mobile.mobile_api_models import (
@@ -190,12 +191,24 @@ async def get_original_chapter_text(bookId: str, chapterId: str):
 
 # --- Персонажи ---
 
+def _chapter_order_or_404(repo: BookRepository, chapter_id: str) -> dict:
+    order = chapter_order(repo.get_all_chapters())
+    if chapter_id not in order:
+        raise HTTPException(status_code=404, detail=f"Глава '{chapter_id}' не найдена.")
+    return order
+
+
 @api_router.get("/books/{bookId}/characters", response_model=List[CharacterListEntryDto],
                 dependencies=[Depends(verify_token)])
-async def get_book_characters(bookId: str):
+async def get_book_characters(
+        bookId: str,
+        asOfChapter: Optional[str] = Query(None, description="Только персонажи, уже появившиеся к этой главе")):
     try:
         repo = BookRepository(book_id=bookId)
         db_chars = repo.get_characters()
+        if asOfChapter:
+            order = _chapter_order_or_404(repo, asOfChapter)
+            db_chars = [c for c in db_chars if character_as_of(c, order, asOfChapter) is not None]
         result_list = []
 
         for char in db_chars:
@@ -208,6 +221,8 @@ async def get_book_characters(bookId: str):
             ))
 
         return result_list
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Ошибка /characters для {bookId}: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
@@ -215,7 +230,9 @@ async def get_book_characters(bookId: str):
 
 @api_router.get("/books/{bookId}/characters/{characterId}", response_model=CharacterDetailsDto,
                 dependencies=[Depends(verify_token)])
-async def get_character_details(bookId: str, characterId: str):
+async def get_character_details(
+        bookId: str, characterId: str,
+        asOfChapter: Optional[str] = Query(None, description="Описание и упоминания на момент этой главы")):
     try:
         from uuid import UUID
         from core.data_models import Character
@@ -230,6 +247,24 @@ async def get_character_details(bookId: str, characterId: str):
 
         if not target_char:
             raise HTTPException(status_code=404, detail="Персонаж не найден.")
+
+        if asOfChapter:
+            view = character_as_of(target_char, _chapter_order_or_404(repo, asOfChapter), asOfChapter)
+            if view is None:
+                raise HTTPException(status_code=404, detail="Персонаж к этой главе еще не появлялся.")
+            return CharacterDetailsDto(
+                id=str(target_char.id),
+                name=target_char.name,
+                avatar_url=f"/static/books/{bookId}/chars/{target_char.id}.jpg",
+                description=view.description,
+                spoiler_free_description=target_char.spoiler_free_description,
+                # Ограничение: алиасы не версионируются; если среди них «настоящее имя», это спойлер.
+                aliases=target_char.aliases,
+                chapter_mentions=view.chapter_mentions,
+                as_of_chapter=asOfChapter,
+                description_from_chapter=view.description_from,
+                first_chapter=view.first_chapter,
+            )
 
         return CharacterDetailsDto(
             id=str(target_char.id),
