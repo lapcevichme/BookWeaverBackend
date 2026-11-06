@@ -23,6 +23,7 @@ from services.model_manager import ModelManager
 from utils.metrics import metrics_collector
 from utils.prompt_utils import generate_human_schema
 from utils.text_utils import split_text_for_llm
+from core.character_view import chapter_order, characters_as_of
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,8 @@ class ScenarioGenerationPipeline:
                 contextual_characters = CharacterArchive(characters=chars)
 
                 raw_scenario = self._generate_raw_scenario(repo, chapter_id, contextual_characters,
-                                                           repo.get_summary_archive(), update_progress)
+                                                           repo.get_summary_archive(), update_progress,
+                                                           profiles=self._profiles_as_of(repo, chapter_id, chars))
                 if not raw_scenario:
                     raise ValueError("Ошибка генерации raw scenario.")
 
@@ -117,8 +119,9 @@ class ScenarioGenerationPipeline:
             chars = repo.get_characters()
             contextual_characters = CharacterArchive(characters=chars)
             
-            emotion_enriched_scenario = self._enrich_with_emotions(sound_enriched_scenario,
-                                                                   contextual_characters, chapter_id)
+            emotion_enriched_scenario = self._enrich_with_emotions(
+                sound_enriched_scenario, contextual_characters, chapter_id,
+                profiles=self._profiles_as_of(repo, chapter_id, chars))
 
             # 4. Сборка и сохранение в БД
             with repo.get_session() as session:
@@ -168,6 +171,18 @@ class ScenarioGenerationPipeline:
             update_progress(1.0, "Ошибка", str(e))
             logger.error(f"❌ Error: {e}", exc_info=True)
             raise e
+
+    @staticmethod
+    def _profiles_as_of(repo: BookRepository, chapter_id: str, chars) -> Optional[Dict[str, str]]:
+        """
+        Имя -> описание на момент главы: только уже появившиеся персонажи, без знания будущих глав.
+        Иначе модель может отдать реплику персонажу, которого в главе еще нет, а описание
+        из будущего (например, раскрытие личности) — переназначить реплики на другой голос.
+        """
+        order = chapter_order(repo.get_all_chapters())
+        if chapter_id not in order:
+            return None
+        return {v.character.name: v.description for v in characters_as_of(chars, order, chapter_id)}
 
     def _generate_chunk(self, llm, prompt: str, chunk_text: str, i: int) -> Optional[RawScenario]:
         """Генерирует один чанк с повторами по покрытию текста. Возвращает лучший вариант или None."""
@@ -225,7 +240,8 @@ class ScenarioGenerationPipeline:
             chapter_id: str,
             archive: CharacterArchive,
             summary_archive: ChapterSummaryArchive,
-            progress_callback: Optional[Callable] = None
+            progress_callback: Optional[Callable] = None,
+            profiles: Optional[Dict[str, str]] = None
     ) -> RawScenario | None:
         """
         Генерирует сценарий, при необходимости разбивая текст на чанки.
@@ -252,7 +268,8 @@ class ScenarioGenerationPipeline:
                 chapter_summary=synopsis,
                 chunk_index=i,
                 total_chunks=total_chunks,
-                previous_context=previous_context
+                previous_context=previous_context,
+                character_profiles=profiles
             )
             for i, (previous_context, chunk_text) in enumerate(chunks)
         ]
@@ -344,7 +361,8 @@ class ScenarioGenerationPipeline:
 
         return entries
 
-    def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str) -> List[Dict]:
+    def _enrich_with_emotions(self, entries: List[Dict], archive: CharacterArchive, chapter_id: str,
+                              profiles: Optional[Dict[str, str]] = None) -> List[Dict]:
         """Анализ эмоций и подготовка теневого текста (tts_text) для CosyVoice 3."""
         replicas = [
             {"id": e['id'], "speaker": e['speaker'], "text": e['text']}
@@ -355,7 +373,7 @@ class ScenarioGenerationPipeline:
             return entries
 
         char_profiles = {
-            char.name: f"ОБЩЕЕ: {char.spoiler_free_description}"
+            char.name: f"ОБЩЕЕ: {(profiles or {}).get(char.name) or char.spoiler_free_description}"
             for char in archive.characters if chapter_id in char.chapter_mentions
         }
 

@@ -243,20 +243,21 @@ def format_scenario_generation_prompt(
         chapter_summary: Optional[str] = None,
         chunk_index: int = 0,
         total_chunks: int = 1,
-        previous_context: str = ""
+        previous_context: str = "",
+        character_profiles: Optional[Dict[str, str]] = None
 ) -> str:
     """
     Формирует промпт для генерации "сырого" сценария главы (или её части).
+    `character_profiles` — имя -> описание на момент главы. Если не задано, берутся все
+    персонажи архива с первым описанием (старое поведение).
     Порядок блоков: сначала статичные правила (одинаковые для всех вызовов — попадают
     в кэш провайдера), затем данные книги, в самом конце текст текущего чанка.
     """
     schema_description = generate_human_schema(LlmRawScenario)
 
-    character_profiles = [
-        f"- {char.name}: {char.spoiler_free_description}"
-        for char in character_archive.characters
-    ]
-    character_profiles_block = "\n".join(character_profiles)
+    if character_profiles is None:
+        character_profiles = {char.name: char.spoiler_free_description for char in character_archive.characters}
+    character_profiles_block = "\n".join(f"- {name}: {desc}" for name, desc in character_profiles.items())
 
     summary_block = ""
     if chapter_summary:
