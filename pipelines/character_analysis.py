@@ -22,6 +22,14 @@ from core.errors import PipelineIncompleteError, TaskCancelledException
 logger = logging.getLogger(__name__)
 
 
+class _ChapterFailed(Exception):
+    """Глава не обработана после всех попыток; этап останавливается на ней."""
+
+    def __init__(self, reason: str):
+        super().__init__(reason)
+        self.reason = reason
+
+
 class CharacterAnalysisPipeline:
     def __init__(self, model_manager: ModelManager):
         self.model_manager = model_manager
@@ -67,95 +75,53 @@ class CharacterAnalysisPipeline:
 
             master_archive = repo.get_character_archive()
             summary_archive = repo.get_summary_archive()
+            self._backfill_legacy_progress(repo, db_chapters, master_archive)
 
             total_chapters = len(db_chapters)
             stage = "Анализ глав"
-            failed = {}
+            pending = [c for c in db_chapters if not c.characters_state]
+            done_before = total_chapters - len(pending)
+            if done_before:
+                logger.info(f"⏩ Уже обработано глав: {done_before} из {total_chapters}, продолжаю с {pending[0].id if pending else '—'}")
+            if pending:
+                # Цепочка: глава N читает архив, собранный по главам до нее. Обработка главы,
+                # после которой уже есть обработанные, допишет в ее версию знание будущих глав.
+                later_done = [c.id for c in db_chapters
+                              if c.characters_state and c.order_index > pending[0].order_index]
+                if later_done:
+                    logger.warning(f"⚠️ {pending[0].id} обрабатывается после уже обработанных {later_done[:3]}"
+                                   f"{'…' if len(later_done) > 3 else ''}: описания могут знать будущие главы.")
 
-            for idx, chap in enumerate(db_chapters):
+            for chap in pending:
+                idx = db_chapters.index(chap)
                 progress = 0.1 + (idx / total_chapters) * 0.9
                 chapter_id = chap.id
-                vol_num = chap.volume_num
-                chap_num = chap.chapter_num
-                
                 metrics_collector.start_chapter(f"{book_name}:{chapter_id}")
 
+                def chapter_progress(message: str):
+                    update_progress(progress, stage, f"Глава {idx + 1}/{total_chapters}: {message}")
+
                 try:
-                    chapter_text = repo.get_chapter_text(chapter_id)
-                except (FileNotFoundError, ValueError) as e:
-                    failed[chapter_id] = f"нет текста главы: {e}"
-                    logger.error(f"❌ Пропуск главы {chapter_id}: {e}")
-                    continue
+                    self._process_chapter(chap, master_archive, summary_archive, repo, book_name, chapter_progress)
+                except _ChapterFailed as e:
+                    # Архив в памяти мог частично измениться, но в БД ничего не пишем:
+                    # там остается состояние после последней успешной главы.
+                    logger.info(f"📊 Статистика патча: {dict(self.stats)}")
+                    raise PipelineIncompleteError(
+                        "Анализ персонажей", total_chapters, {chapter_id: e.reason},
+                        message=(f"Анализ персонажей остановлен на {chapter_id} (готово {idx} из {total_chapters}): "
+                                 f"{e.reason}. Повторный запуск продолжит с этой главы; пропустить ее: "
+                                 f"python tools/skip_character_chapter.py --book {book_name} --chapter {chapter_id}"),
+                    ) from None
 
-                if not chapter_text.strip():
-                    self._mark_chapter_processed(master_archive, chapter_id)
-                    repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
-                    continue
-
-                chapter_summary_text = None
-                if chapter_id in summary_archive.summaries:
-                    chapter_summary_text = summary_archive.summaries[chapter_id].synopsis
-
-                update_progress(progress, stage, f"Глава {idx + 1}/{total_chapters}: Разведка...")
-                recon_result = self._perform_recon(master_archive, chapter_text, chapter_summary_text)
-
-                if not recon_result:
-                    # Глава НЕ помечается обработанной: персонажи этой главы неизвестны.
-                    failed[chapter_id] = "разведка (recon) не вернула валидный ответ"
-                    logger.error(f"❌ Recon не удался для главы {chapter_id}")
-                    continue
-
-                logger.info(f"🔍 Recon: Найдено известных: {len(recon_result.mentioned_existing_refs)}, новых имен: {len(recon_result.newly_discovered_names)}")
-
-                if not recon_result.mentioned_existing_refs and not recon_result.newly_discovered_names:
-                    logger.info(f"В главе {chapter_id} персонажи не обнаружены.")
-                    self._mark_chapter_processed(master_archive, chapter_id)
-                    repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
-                    continue
-
-                chapter_key = f"vol_{vol_num}_chap_{chap_num}"
-                refs = self._assign_refs(master_archive.characters)
-                known = [refs[r] for r in dict.fromkeys(recon_result.mentioned_existing_refs) if r in refs]
-                bad_refs = [r for r in recon_result.mentioned_existing_refs if r not in refs]
-                if bad_refs:
-                    self.stats["recon_unknown_refs"] += len(bad_refs)
-                    logger.warning(f"Recon вернул неизвестные ref: {bad_refs}")
-                candidates = [n.strip() for n in dict.fromkeys(recon_result.newly_discovered_names) if n and n.strip()]
-
-                # Один проход: известные + кандидаты пачками. Остальной архив идет справочником.
-                units = [("char", c) for c in known] + [("name", n) for n in candidates]
-                batch_size = max(1, config.CHARACTER_PATCH_BATCH)
-                for i in range(0, len(units), batch_size):
-                    batch = units[i:i + batch_size]
-                    to_update = [u for kind, u in batch if kind == "char"]
-                    batch_candidates = [u for kind, u in batch if kind == "name"]
-                    refs = self._assign_refs(master_archive.characters)
-                    update_progress(progress, stage, f"Глава {idx + 1}/{total_chapters}: Патч ({min(i + batch_size, len(units))}/{len(units)})...")
-                    patch_list = self._perform_operation(refs, to_update, batch_candidates, master_archive,
-                                                         chapter_text, vol_num, chap_num)
-                    patched = set()
-                    if patch_list and patch_list.patches:
-                        patched = self._apply_patch(master_archive, patch_list, refs, to_update, batch_candidates,
-                                                    chapter_key, book_name)
-                    elif patch_list is None:
-                        self.stats["patch_call_failed"] += 1
-                        failed[chapter_id] = f"патч не удался (пачка {i // batch_size + 1})"
-                        logger.error(f"❌ Патч не удался: глава {chapter_id}, пачка {i // batch_size + 1}")
-                    missing = [c.id for c in to_update if c.id not in patched]
-                    if missing:
-                        master_archive = self._add_empty_mentions(master_archive, missing, chapter_id)
-
-                # Успешные пачки сохраняем даже при сбое другой пачки, но глава
-                # остается необработанной, чтобы это было видно и ее можно было перезапустить.
                 repo.save_characters(master_archive.characters)
-                if chapter_id not in failed:
-                    self._mark_chapter_processed(master_archive, chapter_id)
+                repo.set_characters_state([chapter_id], "done")
+                self._mark_chapter_processed(master_archive, chapter_id)
+                if chap.status in (ChapterStatus.DRAFT, ChapterStatus.PROCESSING, None):
                     repo.update_chapter_status(chapter_id, ChapterStatus.PROCESSED)
                 metrics_collector.save_to_file(config.LOGS_DIR / "metrics.json")
 
             logger.info(f"📊 Статистика патча: {dict(self.stats)}")
-            if failed:
-                raise PipelineIncompleteError("Анализ персонажей", total_chapters, failed)
             update_progress(1.0, "Завершено", f"Анализ завершен. Персонажей: {len(master_archive.characters)}.")
 
         except (PipelineIncompleteError, TaskCancelledException):
@@ -163,6 +129,85 @@ class CharacterAnalysisPipeline:
         except Exception as e:
             logger.error(f"❌ Ошибка пайплайна: {e}", exc_info=True)
             raise
+
+    def _call_with_retries(self, fn, what: str):
+        """Повторяет вызов LLM, вернувший None (битый JSON, невалидный ответ). Сетевые повторы — в llm_service."""
+        attempts = max(1, config.CHARACTER_CALL_ATTEMPTS)
+        for attempt in range(1, attempts + 1):
+            result = fn()
+            if result is not None:
+                return result
+            self.stats[f"retry_{what}"] += 1
+            logger.warning(f"⚠️ {what}: невалидный ответ, попытка {attempt}/{attempts}")
+        raise _ChapterFailed(f"{what}: нет валидного ответа после {attempts} попыток")
+
+    def _process_chapter(self, chap, master_archive: CharacterArchive, summary_archive,
+                         repo: BookRepository, book_name: str, chapter_progress: Callable[[str], None]):
+        """Обрабатывает одну главу целиком или бросает _ChapterFailed."""
+        chapter_id, vol_num, chap_num = chap.id, chap.volume_num, chap.chapter_num
+        try:
+            chapter_text = repo.get_chapter_text(chapter_id)
+        except (FileNotFoundError, ValueError) as e:
+            raise _ChapterFailed(f"нет текста главы: {e}")
+        if not chapter_text.strip():
+            return
+
+        summary = summary_archive.summaries.get(chapter_id)
+        chapter_summary_text = summary.synopsis if summary else None
+
+        chapter_progress("Разведка...")
+        recon_result = self._call_with_retries(
+            lambda: self._perform_recon(master_archive, chapter_text, chapter_summary_text), "разведка")
+
+        logger.info(f"🔍 Recon: Найдено известных: {len(recon_result.mentioned_existing_refs)}, новых имен: {len(recon_result.newly_discovered_names)}")
+        if not recon_result.mentioned_existing_refs and not recon_result.newly_discovered_names:
+            logger.info(f"В главе {chapter_id} персонажи не обнаружены.")
+            return
+
+        chapter_key = f"vol_{vol_num}_chap_{chap_num}"
+        refs = self._assign_refs(master_archive.characters)
+        known = [refs[r] for r in dict.fromkeys(recon_result.mentioned_existing_refs) if r in refs]
+        bad_refs = [r for r in recon_result.mentioned_existing_refs if r not in refs]
+        if bad_refs:
+            self.stats["recon_unknown_refs"] += len(bad_refs)
+            logger.warning(f"Recon вернул неизвестные ref: {bad_refs}")
+        candidates = [n.strip() for n in dict.fromkeys(recon_result.newly_discovered_names) if n and n.strip()]
+
+        # Один проход: известные + кандидаты пачками. Остальной архив идет справочником.
+        units = [("char", c) for c in known] + [("name", n) for n in candidates]
+        batch_size = max(1, config.CHARACTER_PATCH_BATCH)
+        for i in range(0, len(units), batch_size):
+            batch = units[i:i + batch_size]
+            to_update = [u for kind, u in batch if kind == "char"]
+            batch_candidates = [u for kind, u in batch if kind == "name"]
+            refs = self._assign_refs(master_archive.characters)
+            chapter_progress(f"Патч ({min(i + batch_size, len(units))}/{len(units)})...")
+            patch_list = self._call_with_retries(
+                lambda: self._perform_operation(refs, to_update, batch_candidates, master_archive,
+                                                chapter_text, vol_num, chap_num),
+                f"патч, пачка {i // batch_size + 1}")
+            patched = set()
+            if patch_list.patches:
+                patched = self._apply_patch(master_archive, patch_list, refs, to_update, batch_candidates,
+                                            chapter_key, book_name)
+            missing = [c.id for c in to_update if c.id not in patched]
+            if missing:
+                self._add_empty_mentions(master_archive, missing, chapter_id)
+
+    def _backfill_legacy_progress(self, repo: BookRepository, chapters, archive: CharacterArchive):
+        """
+        Проекты до появления characters_state: обработанными считаются главы, упомянутые
+        в персонажах или уже ушедшие дальше черновика. Иначе перезапуск прогнал бы всю книгу заново.
+        """
+        if any(c.characters_state for c in chapters) or not archive.characters:
+            return
+        processed = set(getattr(archive, "processed_chapters", []) or [])
+        legacy = [c for c in chapters if c.id in processed or (c.status and c.status != ChapterStatus.DRAFT)]
+        if legacy:
+            repo.set_characters_state([c.id for c in legacy], "done")
+            for c in legacy:
+                c.characters_state = "done"
+            logger.info(f"Миграция прогресса: {len(legacy)} глав отмечены как уже проанализированные.")
 
     _ORDINALS = {
         "один", "два", "три", "четыре", "пять", "первый", "второй", "третий", "четвертый",

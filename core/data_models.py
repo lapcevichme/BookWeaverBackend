@@ -107,6 +107,9 @@ class Chapter(SQLModel, table=True):
     chapter_num: int
     title: Optional[str] = None
     status: ChapterStatus = Field(default=ChapterStatus.DRAFT, sa_column=Column(String, default=ChapterStatus.DRAFT))
+    # Прогресс анализа персонажей: None — не обработана, "done", "skipped" (пропущена вручную).
+    # Отдельно от status: сценарий можно сгенерировать и без анализа персонажей.
+    characters_state: Optional[str] = Field(default=None)
     order_index: int = Field(default=0)
     raw_text: Optional[str] = Field(default=None, sa_column=Column(Text))
     

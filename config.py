@@ -53,6 +53,7 @@ _SCENARIO_MAX_ATTEMPTS_DEFAULT = 3
 _SCENARIO_PARALLEL_CHUNKS_DEFAULT = 4
 _CHARACTER_REF_STYLE_DEFAULT = "name"  # numeric: c1, c2... | name: каноническое имя персонажа
 _CHARACTER_PATCH_BATCH_DEFAULT = 8
+_CHARACTER_CALL_ATTEMPTS_DEFAULT = 3  # попыток на разведку и на каждую пачку патча
 _LLM_REQUEST_TIMEOUT_DEFAULT = 1200  # сек; глава на 43k символов генерируется ~5 минут
 _SCENARIO_CHUNK_SIZE_DEFAULT = 45_000  # страховка для гигантских глав; см. docs/experiments/2026-11-06_chunking.md
 
@@ -160,6 +161,8 @@ def __getattr__(name: str):
         return int(_get_db_setting("scenario_max_attempts", _SCENARIO_MAX_ATTEMPTS_DEFAULT))
     elif name == "CHARACTER_REF_STYLE":
         return _get_db_setting("character_ref_style", _CHARACTER_REF_STYLE_DEFAULT)
+    elif name == "CHARACTER_CALL_ATTEMPTS":
+        return int(_get_db_setting("character_call_attempts", _CHARACTER_CALL_ATTEMPTS_DEFAULT))
     elif name == "CHARACTER_PATCH_BATCH":
         return int(_get_db_setting("character_patch_batch", _CHARACTER_PATCH_BATCH_DEFAULT))
     elif name == "SCENARIO_PARALLEL_CHUNKS":

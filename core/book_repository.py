@@ -46,6 +46,16 @@ class BookRepository:
                 session.add(db_chap)
                 session.commit()
 
+    def set_characters_state(self, chapter_ids: List[str], state: Optional[str]):
+        """Отмечает прогресс анализа персонажей: "done", "skipped" или None (сброс)."""
+        with self.get_session() as session:
+            for chapter_id in chapter_ids:
+                db_chap = session.get(Chapter, chapter_id)
+                if db_chap:
+                    db_chap.characters_state = state
+                    session.add(db_chap)
+            session.commit()
+
     def save_characters(self, characters: List[Character]):
         with self.get_session() as session:
             for char in characters:

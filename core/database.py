@@ -109,6 +109,11 @@ def init_book_db(book_path: Path, force: bool = False) -> Engine:
                 logger.info(f"Migration: Adding embedding column to {resolved_path.name}")
                 conn.execute(text("ALTER TABLE character ADD COLUMN embedding JSON DEFAULT NULL"))
                 conn.commit()
+            chapter_columns = [row[1] for row in conn.execute(text("PRAGMA table_info(chapter)")).fetchall()]
+            if chapter_columns and "characters_state" not in chapter_columns:
+                logger.info(f"Migration: Adding characters_state column to {resolved_path.name}")
+                conn.execute(text("ALTER TABLE chapter ADD COLUMN characters_state TEXT DEFAULT NULL"))
+                conn.commit()
             if "description_timeline" not in char_columns:
                 logger.info(f"Migration: Adding description_timeline column to {resolved_path.name}")
                 conn.execute(text("ALTER TABLE character ADD COLUMN description_timeline JSON DEFAULT '{}'"))

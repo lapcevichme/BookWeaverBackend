@@ -118,6 +118,15 @@ class Application:
             if max_chapters and max_chapters > 0:
                 chapter_ids = chapter_ids[:max_chapters]
 
+            if not skip_chars and db_chapters:
+                # Сценарий главы без проанализированных персонажей соберется без них:
+                # идем только до главы, на которой остановился анализ персонажей.
+                first_pending = next((i for i, c in enumerate(db_chapters) if not c.characters_state), None)
+                if first_pending is not None and first_pending < len(chapter_ids):
+                    logger.warning(f"Сценарии только до {db_chapters[first_pending].id}: "
+                                   f"дальше персонажи еще не проанализированы.")
+                    chapter_ids = chapter_ids[:first_pending]
+
             total_chaps = len(chapter_ids)
             failed_scenarios = {}
 

@@ -32,8 +32,10 @@ def tearDownModule():
         p.stop()
 
 
-def _chapters(n):
-    return [SimpleNamespace(id=f"vol_1_chap_{i}", volume_num=1, chapter_num=i) for i in range(n)]
+def _chapters(n, done=()):
+    return [SimpleNamespace(id=f"vol_1_chap_{i}", volume_num=1, chapter_num=i, order_index=i,
+                            status="draft", characters_state="done" if i in done else None)
+            for i in range(n)]
 
 
 def _model_manager(llm):
@@ -75,23 +77,67 @@ class TestSummaryFailures(unittest.TestCase):
                 SummaryGenerationPipeline(_model_manager(MagicMock())).run("book")
 
 
-class TestCharacterFailures(unittest.TestCase):
-    def test_failed_recon_is_reported_and_chapter_not_processed(self):
+class TestCharacterStopAndResume(unittest.TestCase):
+    """Персонажи — цепочка: при сбое этап останавливается, повторный запуск продолжает с упавшей главы."""
+
+    RECON_EMPTY = SimpleNamespace(mentioned_existing_refs=[], newly_discovered_names=[])
+
+    def _run(self, chapters, recon_side_effect):
         from pipelines.character_analysis import CharacterAnalysisPipeline
         pipeline = CharacterAnalysisPipeline(_model_manager(MagicMock()))
         repo = MagicMock()
-        repo.get_all_chapters.return_value = _chapters(2)
+        repo.get_all_chapters.return_value = chapters
         repo.get_character_archive.return_value = CharacterArchive(characters=[])
         repo.get_summary_archive.return_value = ChapterSummaryArchive(summaries={})
         repo.get_chapter_text.return_value = "текст главы"
-        recon_empty = SimpleNamespace(mentioned_existing_refs=[], newly_discovered_names=[])
+        recon = MagicMock(side_effect=recon_side_effect)
         with patch("pipelines.character_analysis.BookRepository", return_value=repo), \
-             patch.object(pipeline, "_perform_recon", side_effect=[None, recon_empty]):
-            with self.assertRaises(PipelineIncompleteError) as ctx:
+             patch.object(pipeline, "_perform_recon", recon), \
+             patch("pipelines.character_analysis.config") as cfg:
+            cfg.CHARACTER_CALL_ATTEMPTS, cfg.CHARACTER_PATCH_BATCH = 3, 8
+            error = None
+            try:
                 pipeline.run("book")
-        self.assertEqual(list(ctx.exception.failed), ["vol_1_chap_0"])
-        processed = [c.args[0] for c in repo.update_chapter_status.call_args_list]
-        self.assertEqual(processed, ["vol_1_chap_1"])
+            except PipelineIncompleteError as e:
+                error = e
+        done = [c.args[0] for c in repo.set_characters_state.call_args_list if c.args[1] == "done"]
+        return error, recon, repo, [ch for ids in done for ch in ids]
+
+    def test_stops_on_failed_chapter_without_saving_it(self):
+        error, recon, repo, done = self._run(_chapters(3), [self.RECON_EMPTY, None, None, None])
+        self.assertIsNotNone(error)
+        self.assertIn("остановлен на vol_1_chap_1", str(error))
+        self.assertIn("skip_character_chapter.py", str(error))
+        self.assertEqual(done, ["vol_1_chap_0"])     # ch2 не тронута: после сбоя не идем дальше
+        self.assertEqual(recon.call_count, 4)        # 1 (ch0) + 3 попытки ch1
+        self.assertEqual(repo.save_characters.call_count, 1)
+
+    def test_invalid_answer_is_retried(self):
+        error, recon, _, done = self._run(_chapters(1), [None, self.RECON_EMPTY])
+        self.assertIsNone(error)
+        self.assertEqual(recon.call_count, 2)
+        self.assertEqual(done, ["vol_1_chap_0"])
+
+    def test_resume_skips_done_and_skipped_chapters(self):
+        chapters = _chapters(3, done=(0,))
+        chapters[1].characters_state = "skipped"
+        error, recon, _, done = self._run(chapters, [self.RECON_EMPTY])
+        self.assertIsNone(error)
+        self.assertEqual(recon.call_count, 1)
+        self.assertEqual(done, ["vol_1_chap_2"])
+
+    def test_legacy_project_is_not_reprocessed(self):
+        from core.data_models import Character
+        from pipelines.character_analysis import CharacterAnalysisPipeline
+        pipeline = CharacterAnalysisPipeline(_model_manager(MagicMock()))
+        chapters = _chapters(2)
+        archive = CharacterArchive(characters=[Character(book_id="book", name="Маомао", description="d",
+                                                         spoiler_free_description="d")],
+                                   processed_chapters=["vol_1_chap_0"])
+        repo = MagicMock()
+        pipeline._backfill_legacy_progress(repo, chapters, archive)
+        repo.set_characters_state.assert_called_once_with(["vol_1_chap_0"], "done")
+        self.assertEqual([c.characters_state for c in chapters], ["done", None])
 
 
 class TestScenarioFailures(unittest.TestCase):
@@ -146,7 +192,7 @@ class TestFullCycleFailures(unittest.TestCase):
         app.scenario_pipeline = MagicMock()
         app.scenario_pipeline.run.side_effect = [None, ValueError("нет ответа"), None]
         repo = MagicMock()
-        repo.get_all_chapters.return_value = _chapters(3)
+        repo.get_all_chapters.return_value = _chapters(3, done=(0, 1, 2))
         messages = []
         with patch("core.book_repository.BookRepository", return_value=repo):
             with self.assertRaises(PipelineIncompleteError) as ctx:
@@ -162,10 +208,25 @@ class TestFullCycleFailures(unittest.TestCase):
         app.scenario_pipeline = MagicMock()
         app.scenario_pipeline.run.side_effect = TaskCancelledException("cancel")
         repo = MagicMock()
-        repo.get_all_chapters.return_value = _chapters(2)
+        repo.get_all_chapters.return_value = _chapters(2, done=(0, 1))
         with patch("core.book_repository.BookRepository", return_value=repo):
             with self.assertRaises(TaskCancelledException):
                 app.run_full_cycle("book")
+
+    def test_scenarios_stop_where_characters_stopped(self):
+        import main
+        cls = next(v for v in vars(main).values() if isinstance(v, type) and hasattr(v, "run_full_cycle"))
+        app = cls.__new__(cls)
+        app.summary_pipeline = MagicMock()
+        app.character_pipeline = MagicMock()
+        app.character_pipeline.run.side_effect = PipelineIncompleteError("Анализ персонажей", 4, {"vol_1_chap_2": "x"})
+        app.scenario_pipeline = MagicMock()
+        repo = MagicMock()
+        repo.get_all_chapters.return_value = _chapters(4, done=(0, 1))
+        with patch("core.book_repository.BookRepository", return_value=repo):
+            with self.assertRaises(PipelineIncompleteError):
+                app.run_full_cycle("book")
+        self.assertEqual([c.kwargs["chapter_num"] for c in app.scenario_pipeline.run.call_args_list], [0, 1])
 
 
 if __name__ == "__main__":
