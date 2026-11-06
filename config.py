@@ -45,6 +45,8 @@ SERVER_PORT = int(os.environ.get("SERVER_PORT", 8000))
 _LLM_PROVIDER_DEFAULT = os.environ.get("LLM_PROVIDER", "google") # openrouter / google
 _FAST_MODEL_NAME_DEFAULT = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
 _POWERFUL_MODEL_NAME_DEFAULT = os.environ.get("POWERFUL_MODEL_NAME", "gemma-3-27b-it")
+_OPENROUTER_PROVIDER_ORDER_DEFAULT = os.environ.get("OPENROUTER_PROVIDER_ORDER", "")
+_OPENROUTER_REASONING_EFFORT_DEFAULT = os.environ.get("OPENROUTER_REASONING_EFFORT", "")
 _SCENARIO_CHUNK_SIZE_DEFAULT = 40_000
 
 # Temp Defaults
@@ -139,6 +141,10 @@ def __getattr__(name: str):
         return _get_db_setting("fast_model", _FAST_MODEL_NAME_DEFAULT)
     elif name == "POWERFUL_MODEL_NAME":
         return _get_db_setting("powerful_model", _POWERFUL_MODEL_NAME_DEFAULT)
+    elif name == "OPENROUTER_PROVIDER_ORDER":
+        return _get_db_setting("openrouter_provider_order", _OPENROUTER_PROVIDER_ORDER_DEFAULT)
+    elif name == "OPENROUTER_REASONING_EFFORT":
+        return _get_db_setting("openrouter_reasoning_effort", _OPENROUTER_REASONING_EFFORT_DEFAULT)
     elif name == "SCENARIO_CHUNK_SIZE":
         return int(_get_db_setting("chunk_size", _SCENARIO_CHUNK_SIZE_DEFAULT))
     elif name == "ANALYZER_LLM_TEMPERATURE":

@@ -2,6 +2,7 @@ import time
 import re
 import logging
 import os
+from pathlib import Path
 from typing import Type, TypeVar, Optional, Tuple
 from threading import Lock
 from dotenv import load_dotenv
@@ -55,9 +56,13 @@ class LLMService:
                     self._client = OpenAI(base_url=base_url, api_key=api_key)
         return self._client
 
-    def _track_usage(self, input_tokens: int, output_tokens: int):
+    def _track_usage(self, input_tokens: int, output_tokens: int, real_cost: Optional[float] = None):
         self.total_input_tokens += input_tokens
         self.total_output_tokens += output_tokens
+        if real_cost is not None:
+            # Реальная стоимость от OpenRouter (учитывает провайдера и кэш)
+            self.total_cost += real_cost
+            return
         price_info = PRICING_REGISTRY.get(self.model_name)
         if price_info:
             cost = (input_tokens / 1_000_000) * price_info["input"] + (output_tokens / 1_000_000) * price_info["output"]
@@ -77,6 +82,7 @@ class LLMService:
                 result = self._process_response_text(response_text, pydantic_model)
                 if not result:
                     status = "json_error"
+                    self._dump_failed_response(prompt_type, prompt, response_text)
                     logger.error(f"❌ JSON/Validation Error for {prompt_type}. Raw response: {response_text[:1000]}...")
                 else:
                     return result
@@ -97,6 +103,49 @@ class LLMService:
             ))
         return None
 
+    def _dump_failed_response(self, prompt_type: str, prompt: str, response_text: str):
+        """Сохраняет полный промпт и сырой ответ модели, если ответ не прошел валидацию."""
+        try:
+            from datetime import datetime
+            import config
+            out_dir = Path(config.BASE_DIR) / "logs" / "llm_failures"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            name = f"{datetime.now():%Y%m%d_%H%M%S}_{prompt_type}_{self.model_name.replace('/', '_')}.txt"
+            (out_dir / name).write_text(
+                f"=== MODEL: {self.model_name}\n=== PROMPT ({len(prompt)} chars)\n{prompt}\n\n"
+                f"=== RESPONSE ({len(response_text)} chars)\n{response_text}\n",
+                encoding="utf-8",
+            )
+            logger.error(f"Сырой ответ сохранен: {out_dir / name}")
+        except Exception as e:
+            logger.warning(f"Не удалось сохранить сырой ответ: {e}")
+
+    @staticmethod
+    def _openrouter_reasoning() -> Optional[dict]:
+        """Настройка reasoning на OpenRouter: '' (по умолчанию модели), 'none', 'low', 'medium', 'high'."""
+        import config
+        effort = (getattr(config, "OPENROUTER_REASONING_EFFORT", "") or "").strip().lower()
+        if not effort:
+            return None
+        if effort == "none":
+            return {"enabled": False}
+        return {"effort": effort}
+
+    @staticmethod
+    def _openrouter_routing() -> Optional[dict]:
+        """
+        Закрепление провайдера на OpenRouter. Порядок берется из настройки
+        openrouter_provider_order (через запятую). Фолбэки на другие провайдеры
+        отключены, чтобы запрос случайно не ушел к дорогому эндпоинту.
+        """
+        import config
+        order = getattr(config, "OPENROUTER_PROVIDER_ORDER", "") or ""
+        if isinstance(order, str):
+            order = [x.strip() for x in order.split(",") if x.strip()]
+        if not order:
+            return None
+        return {"order": order, "allow_fallbacks": False}
+
     def _raw_call_llm(self, prompt: str) -> Tuple[Optional[str], Tuple[int, int]]:
         max_retries = 3
         for attempt in range(max_retries):
@@ -110,12 +159,31 @@ class LLMService:
                 }
                 if "gemma" not in self.model_name.lower():
                     kwargs["response_format"] = {"type": "json_object"}
+                if self.provider == "openrouter":
+                    extra = {}
+                    routing = self._openrouter_routing()
+                    if routing:
+                        extra["provider"] = routing
+                    reasoning = self._openrouter_reasoning()
+                    if reasoning:
+                        extra["reasoning"] = reasoning
+                    if extra:
+                        kwargs["extra_body"] = extra
 
                 completion = self.client.chat.completions.create(**kwargs)
                 usage = (0, 0)
                 if completion.usage:
                     usage = (completion.usage.prompt_tokens, completion.usage.completion_tokens)
-                    self._track_usage(*usage)
+                    details = getattr(completion.usage, "prompt_tokens_details", None)
+                    cached = (getattr(details, "cached_tokens", 0) or 0) if details else 0
+                    out_details = getattr(completion.usage, "completion_tokens_details", None)
+                    reasoning_toks = (getattr(out_details, "reasoning_tokens", 0) or 0) if out_details else 0
+                    real_cost = getattr(completion.usage, "cost", None)
+                    self._track_usage(*usage, real_cost=real_cost)
+                    logger.info(
+                        f"LLM usage [{self.model_name} @ {getattr(completion, 'provider', '?')}]: "
+                        f"in={usage[0]} (cached={cached}), out={usage[1]} (reasoning={reasoning_toks}), cost=${real_cost if real_cost is not None else '?'}"
+                    )
 
                 content = completion.choices[0].message.content if completion.choices else None
                 return content, usage
