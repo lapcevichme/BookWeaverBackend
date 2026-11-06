@@ -36,10 +36,10 @@ def _describe_type(type_obj) -> tuple[str, list[Type[BaseModel]]]:
         return type_obj.__name__, nested_models
 
     if inspect.isclass(type_obj) and issubclass(type_obj, Enum):
-        return f"Enum[{', '.join([f'\' {e.value} \'' for e in type_obj])}]", []
+        return f"Enum[{', '.join([f"'{e.value}'" for e in type_obj])}]", []
 
     if origin is Literal:
-        return f"Literal[{', '.join([f'\' {a} \'' for a in args])}]", []
+        return f"Literal[{', '.join([f"'{a}'" for a in args])}]", []
 
     if origin is Union:
         non_none_args = [t for t in args if t is not type(None)]

@@ -1,5 +1,6 @@
 import time
 import re
+import json
 import logging
 import os
 from pathlib import Path
@@ -192,13 +193,38 @@ class LLMService:
                 time.sleep(2)
         return None, (0, 0)
 
+    @staticmethod
+    def _extract_json(text: str):
+        """
+        Достает JSON из ответа модели: сначала пробует весь ответ целиком,
+        затем содержимое ```json-блока, затем фрагмент от первой открывающей
+        скобки ({ или [ — какая встретится раньше) до последней парной.
+        """
+        candidates = [text.strip()]
+        fence = re.search(r'```(?:json)?\s*(.*?)\s*```', text, re.DOTALL)
+        if fence:
+            candidates.append(fence.group(1))
+        starts = [i for i in (text.find('{'), text.find('[')) if i != -1]
+        if starts:
+            start = min(starts)
+            end = text.rfind('}' if text[start] == '{' else ']')
+            if end > start:
+                candidates.append(text[start:end + 1])
+        for candidate in candidates:
+            try:
+                return json.loads(candidate)
+            except (json.JSONDecodeError, ValueError):
+                continue
+        return None
+
     def _process_response_text(self, text: str, pydantic_model: Type[PydanticModel]) -> Optional[PydanticModel]:
         text = re.sub(r'[\x00-\x1F]', '', text)
-        match = re.search(r'```json\s*(\{.*}|\[.*])\s*```', text, re.DOTALL) or re.search(r'(\{.*}|\[.*])', text, re.DOTALL)
-        if not match:
+        data = self._extract_json(text)
+        if data is None:
+            logger.error("❌ JSON Parsing Error: в ответе не найден валидный JSON")
             return None
         try:
-            return pydantic_model.model_validate_json(match.group(1).strip())
+            return pydantic_model.model_validate(data)
         except ValidationError as ve:
             logger.error(f"❌ Pydantic Validation Error for {pydantic_model.__name__}: {ve}")
             return None

@@ -309,6 +309,14 @@ class RawScenarioEntry(PydanticBaseModel):
 class RawScenario(PydanticBaseModel):
     scenario: List[RawScenarioEntry]
 
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_bare_list(cls, data: Any):
+        # Модель иногда возвращает голый массив записей вместо {"scenario": [...]}
+        if isinstance(data, list):
+            return {"scenario": data}
+        return data
+
 class LlmRawScenarioEntry(PydanticBaseModel):
     type: ScenarioEntryType
     speaker: Optional[str] = None
@@ -317,6 +325,14 @@ class LlmRawScenarioEntry(PydanticBaseModel):
 
 class LlmRawScenario(PydanticBaseModel):
     scenario: List[LlmRawScenarioEntry]
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_bare_list(cls, data: Any):
+        # Модель иногда возвращает голый массив записей вместо {"scenario": [...]}
+        if isinstance(data, list):
+            return {"scenario": data}
+        return data
 
 class SoundDesignItem(PydanticBaseModel):
     entry_id: str = Field(...)
