@@ -205,6 +205,10 @@ class Character(SQLModel, table=True):
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
     visual_timeline: Dict[str, CharacterVisualState] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
     chapter_mentions: Dict[str, str] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
+    # Версии описания: chapter_id -> полное описание на конец этой главы.
+    # Версия на главе N собрана только из глав 1..N, поэтому бесспойлерна для слушателя,
+    # дошедшего до N. `description` хранит последнюю версию.
+    description_timeline: Dict[str, str] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
     
     # Relationships
     book: "Book" = Relationship(back_populates="characters")
@@ -294,6 +298,81 @@ class CharacterPatch(PydanticBaseModel):
 
 class CharacterPatchList(PydanticBaseModel):
     patches: List[CharacterPatch]
+
+
+# --- Схемы, которые видит LLM при анализе персонажей (без служебных полей и UUID) ---
+
+class LlmReconResult(PydanticBaseModel):
+    mentioned_existing_refs: List[str] = Field(default_factory=list, description="ref известных персонажей, которые есть в главе")
+    newly_discovered_names: List[str] = Field(default_factory=list, description="Имена новых персонажей")
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce(cls, data: Any):
+        if isinstance(data, dict):
+            refs = data.get("mentioned_existing_refs") or data.get("mentioned_existing_character_ids") or []
+            data["mentioned_existing_refs"] = [str(r) for r in refs if r is not None]
+        return data
+
+
+class LlmVoiceState(PydanticBaseModel):
+    age_group: str = Field(..., description="child | teen | adult | elderly")
+    voice_description: str = Field(..., description="Как звучит голос, на русском")
+    search_tags: Optional[str] = Field(None, description="5-7 тегов на английском")
+
+
+class LlmVisualState(PydanticBaseModel):
+    description: str = Field(..., description="Внешность и одежда в этой главе, на русском")
+    image_prompt: Optional[str] = Field(None, description="Промпт для генерации, на английском")
+
+
+class LlmCharacterPatch(PydanticBaseModel):
+    ref: Optional[str] = Field(None, description="ref из входных данных; для нового персонажа не пиши")
+    name: Optional[str] = Field(None, description="Каноническое имя")
+    entity_type: Optional[CharacterType] = None
+    role_tier: Optional[RoleTier] = None
+    gender: Optional[CharacterGender] = None
+    aliases: Optional[List[str]] = Field(None, description="Только новые имена/прозвища/титулы из этой главы")
+    current_chapter_action: Optional[str] = Field(None, description="Что делает в этой главе, одно предложение")
+    description_update: Optional[str] = Field(None, description="Полное актуальное описание, только если глава добавила новое")
+    visual_base: Optional[str] = Field(None, description="Только если у персонажа пусто")
+    voice_base: Optional[str] = Field(None, description="Только если у персонажа пусто")
+    timeline_visual_update: Optional[LlmVisualState] = None
+    timeline_voice_update: Optional[LlmVoiceState] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def coerce(cls, data: Any):
+        if not isinstance(data, dict):
+            return data
+        for key in ("entity_type", "role_tier", "gender"):
+            if isinstance(data.get(key), str):
+                data[key] = data[key].strip().lower()
+        if data.get("ref") is not None:
+            data["ref"] = str(data["ref"]).strip() or None
+        # Неполные или кривые вложенные объекты не должны ронять весь список патчей
+        for key, required in (("timeline_voice_update", ("age_group", "voice_description")),
+                              ("timeline_visual_update", ("description",))):
+            value = data.get(key)
+            if value is not None and (not isinstance(value, dict) or any(not value.get(r) for r in required)):
+                data[key] = None
+        # Неизвестные значения enum -> None (вместо ошибки валидации)
+        enums = {"entity_type": CharacterType, "role_tier": RoleTier, "gender": CharacterGender}
+        for key, enum in enums.items():
+            if data.get(key) is not None and data[key] not in {e.value for e in enum}:
+                data[key] = None
+        return data
+
+
+class LlmCharacterPatchList(PydanticBaseModel):
+    patches: List[LlmCharacterPatch] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def wrap_bare_list(cls, data: Any):
+        if isinstance(data, list):
+            return {"patches": data}
+        return data
 
 class RawChapterSummary(PydanticBaseModel):
     teaser: str = Field(...)

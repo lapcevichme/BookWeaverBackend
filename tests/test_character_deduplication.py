@@ -1,6 +1,6 @@
 import unittest
 from uuid import uuid4
-from core.data_models import Character, CharacterArchive, CharacterPatchList, CharacterPatch, CharacterType
+from core.data_models import Character, CharacterArchive, LlmCharacterPatchList, LlmCharacterPatch, CharacterType
 from services.embedding_service import EmbeddingService
 from services.model_manager import ModelManager
 from pipelines.character_analysis import CharacterAnalysisPipeline
@@ -25,22 +25,26 @@ class TestCharacterDeduplication(unittest.TestCase):
             )
         ])
 
-        # Патч с именем "Рыжий кот", которое есть в aliases
-        patch = CharacterPatch(
+        # Кандидат "Рыжий кот" — это алиас существующего персонажа (модель не дала ref)
+        patch = LlmCharacterPatch(
             name="Рыжий кот",
             entity_type=CharacterType.ANIMAL,
-            description="Тот же рыжий кот на коленях Уинстона.",
+            description_update="Тот же рыжий кот на коленях Уинстона.",
             current_chapter_action="Сидит на коленях."
         )
-        patch_list = CharacterPatchList(patches=[patch])
+        patch_list = LlmCharacterPatchList(patches=[patch])
+        refs = self.pipeline._assign_refs(archive.characters)
 
-        updated = self.pipeline._apply_patch(archive, patch_list, vol=1, chap=3, chapter_text="", book_id="test_book")
-        self.assertEqual(len(updated.characters), 1)
-        self.assertEqual(updated.characters[0].name, "Джек")
-        self.assertIn("vol_1_chap_3", updated.characters[0].chapter_mentions)
+        self.pipeline._apply_patch(archive, patch_list, refs, [], ["Рыжий кот"], "vol_1_chap_3", "test_book")
+        self.assertEqual(len(archive.characters), 1)
+        self.assertEqual(archive.characters[0].name, "Джек")
+        self.assertIn("vol_1_chap_3", archive.characters[0].chapter_mentions)
 
     def test_vector_deduplication(self):
-        """Проверяет векторное слияние, когда имя не совпадает точно, но семантика идентична."""
+        """Векторное сходство не сливает персонажей: только помечается в статистике.
+
+        На Кусурии автослияние по порогу 0.70 склеило 4 пары разных людей
+        (docs/experiments/2026-11-06_character-patch.md)."""
         emb_service = self.mm.get_embedding_service()
         
         # Создаем персонажа Джек с вектором
@@ -59,22 +63,21 @@ class TestCharacterDeduplication(unittest.TestCase):
         archive = CharacterArchive(characters=[char1])
 
         # Кандидат без точного совпадения имени
-        patch = CharacterPatch(
+        patch = LlmCharacterPatch(
             name="Пушистый рыжий комок шерсти",
             entity_type=CharacterType.ANIMAL,
-            description="Рыжий пушистый кот проводника Смита, незаконно живущий в поезде.",
-            spoiler_free_description="Рыжий кот Смита.",
+            description_update="Рыжий пушистый кот проводника Смита, незаконно живущий в поезде.",
             current_chapter_action="Мяукает у ног проводника."
         )
-        patch_list = CharacterPatchList(patches=[patch])
+        patch_list = LlmCharacterPatchList(patches=[patch])
+        refs = self.pipeline._assign_refs(archive.characters)
 
-        updated = self.pipeline._apply_patch(archive, patch_list, vol=1, chap=3, chapter_text="", book_id="test_book")
-        
-        # Должен остаться 1 персонаж (слияние по вектору)
-        self.assertEqual(len(updated.characters), 1)
-        self.assertEqual(updated.characters[0].name, "Джек")
-        self.assertIn("Пушистый рыжий комок шерсти", updated.characters[0].aliases)
+        self.pipeline._apply_patch(archive, patch_list, refs, [], ["Пушистый рыжий комок шерсти"], "vol_1_chap_3", "test_book")
 
+        # Создан отдельный персонаж, сходство только залогировано
+        self.assertEqual(len(archive.characters), 2)
+        self.assertEqual(self.pipeline.stats["vector_similar_not_merged"], 1)
+        self.assertNotIn("Пушистый рыжий комок шерсти", archive.characters[0].aliases)
 
 if __name__ == "__main__":
     unittest.main()
