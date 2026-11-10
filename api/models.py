@@ -161,6 +161,7 @@ class UpdateCharacterRequest(BaseModel):
     description: Optional[str] = None
     visual_base: Optional[str] = None
     voice_base: Optional[str] = None
+    voice_profile: Optional[str] = None
     aliases: Optional[List[str]] = None
 
 class UpdateBookRequest(BaseModel):

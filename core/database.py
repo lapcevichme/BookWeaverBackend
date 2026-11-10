@@ -114,6 +114,14 @@ def init_book_db(book_path: Path, force: bool = False) -> Engine:
                 logger.info(f"Migration: Adding characters_state column to {resolved_path.name}")
                 conn.execute(text("ALTER TABLE chapter ADD COLUMN characters_state TEXT DEFAULT NULL"))
                 conn.commit()
+            if char_columns and "voice_profile" not in char_columns:
+                # voice_base раньше хранил и id голоса (UI), и теги от LLM. Теги (с пробелами или
+                # запятыми; id голосов — snake_case) переезжают в voice_profile.
+                logger.info(f"Migration: Adding voice_profile column to {resolved_path.name}")
+                conn.execute(text("ALTER TABLE character ADD COLUMN voice_profile TEXT DEFAULT ''"))
+                conn.execute(text("UPDATE character SET voice_profile = voice_base, voice_base = '' "
+                                  "WHERE voice_base LIKE '% %' OR voice_base LIKE '%,%'"))
+                conn.commit()
             if "description_timeline" not in char_columns:
                 logger.info(f"Migration: Adding description_timeline column to {resolved_path.name}")
                 conn.execute(text("ALTER TABLE character ADD COLUMN description_timeline JSON DEFAULT '{}'"))

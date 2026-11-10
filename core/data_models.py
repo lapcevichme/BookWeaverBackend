@@ -202,7 +202,12 @@ class Character(SQLModel, table=True):
     spoiler_free_description: str = Field(..., sa_column=Column(Text))
     description: str = Field(..., sa_column=Column(Text))
     visual_base: Optional[str] = Field(None)
+    # Назначенный голос: id из библиотеки голосов (папка storage/voices/<id>). Выбирает человек
+    # или автоподбор; по нему TTS берет референс.
     voice_base: str = Field(default="")
+    # Описание голоса от анализа персонажей: теги на английском ("young female, calm, soft voice").
+    # Это подсказка для подбора голоса, а не голос.
+    voice_profile: str = Field(default="")
     embedding: Optional[List[float]] = Field(default=None, sa_column=Column(MutableList.as_mutable(JSON)))
     
     voice_timeline: Dict[str, CharacterVoiceState] = Field(default_factory=dict, sa_column=Column(MutableDict.as_mutable(JSON)))
@@ -339,7 +344,7 @@ class LlmCharacterPatch(PydanticBaseModel):
     current_chapter_action: Optional[str] = Field(None, description="Что делает в этой главе, одно предложение")
     description_update: Optional[str] = Field(None, description="Полное актуальное описание, только если глава добавила новое")
     visual_base: Optional[str] = Field(None, description="Только если у персонажа пусто")
-    voice_base: Optional[str] = Field(None, description="Только если у персонажа пусто")
+    voice_profile: Optional[str] = Field(None, description="Теги голоса; новому персонажу обязательно, известному — только если пусто")
     timeline_visual_update: Optional[LlmVisualState] = None
     timeline_voice_update: Optional[LlmVoiceState] = None
 
@@ -348,6 +353,8 @@ class LlmCharacterPatch(PydanticBaseModel):
     def coerce(cls, data: Any):
         if not isinstance(data, dict):
             return data
+        if "voice_base" in data and "voice_profile" not in data:  # старое имя поля
+            data["voice_profile"] = data.pop("voice_base")
         for key in ("entity_type", "role_tier", "gender"):
             if isinstance(data.get(key), str):
                 data[key] = data[key].strip().lower()

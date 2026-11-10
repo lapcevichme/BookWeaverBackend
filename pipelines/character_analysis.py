@@ -214,6 +214,17 @@ class CharacterAnalysisPipeline:
         "первая", "вторая", "третья", "1", "2", "3", "4", "5", "i", "ii", "iii",
     }
 
+    # Родство и обращения: «отец Маомао», «старая хозяйка» — описание, а не имя.
+    # Дополняют черный список ролей из БД (там профессии и сословия).
+    _RELATION_WORDS = {
+        "отец", "мать", "сын", "дочь", "брат", "сестра", "дед", "дедушка", "бабушка", "бабуля",
+        "муж", "жена", "дядя", "тетя", "тётя", "господин", "госпожа", "хозяин", "хозяйка",
+        "принц", "принцесса", "императрица", "король", "королева",
+    }
+
+    def _is_role_word(self, word: str) -> bool:
+        return word in self.GENERIC_ROLES_BLACKLIST or word in self._ORDINALS or word in self._RELATION_WORDS
+
     def _is_role_name(self, name: str) -> bool:
         """
         Имя считается ролью, если ВСЕ его слова — роли из черного списка или порядковые
@@ -278,7 +289,7 @@ class CharacterAnalysisPipeline:
             "role_tier": enum_value(c.role_tier),
             "description": c.description,
             "visual_base": c.visual_base or "",
-            "voice_base": c.voice_base or "",
+            "voice_profile": c.voice_profile or "",
         } for c in to_update], ensure_ascii=False, indent=1)
         directory_json = json.dumps([
             {"ref": ref, "name": c.name, "aliases": c.aliases,
@@ -318,7 +329,7 @@ class CharacterAnalysisPipeline:
                      to_update: List[Character], candidates: List[str], chapter_id: str, book_id: str) -> set:
         """
         Применяет патчи главы. Возвращает id персонажей из to_update, получивших патч.
-        Патч принимается только для to_update и кандидатов; visual_base/voice_base не перезаписываются;
+        Патч принимается только для to_update и кандидатов; visual_base/voice_profile не перезаписываются;
         description_update создает новую версию описания на эту главу.
         """
         role_weights = {"background": 0, "minor": 1, "major": 2, "protagonist": 3}
@@ -369,8 +380,11 @@ class CharacterAnalysisPipeline:
                 self.stats["merged_candidate"] += 1
             self.stats["updated"] += 1
             logger.info(f"🔄 ОБНОВЛЕНИЕ: {char.name}")
+            # Имена и алиасы других персонажей заняты: переименование в них склеило бы двоих
+            taken = frozenset(n.lower() for c in archive.characters if c.id != char.id
+                              for n in [c.name, *(c.aliases or [])])
             self._update_character(char, patch, chapter_id, role_weights,
-                                   allow_rename=not (from_candidate and char.id not in update_ids))
+                                   allow_rename=not (from_candidate and char.id not in update_ids), taken=taken)
         return patched
 
     def _vector_match(self, patch: LlmCharacterPatch, archive: CharacterArchive, embedding_service) -> Optional[Character]:
@@ -404,38 +418,50 @@ class CharacterAnalysisPipeline:
             description_timeline={chapter_id: description} if patch.description_update else {},
             aliases=sorted({a.strip() for a in (patch.aliases or []) if a and a.strip() != name and not self._is_role_name(a)}),
             role_tier=patch.role_tier or "minor", gender=patch.gender,
-            visual_base=patch.visual_base or "", voice_base=patch.voice_base or "",
+            visual_base=patch.visual_base or "", voice_profile=patch.voice_profile or "",
             chapter_mentions={chapter_id: patch.current_chapter_action} if patch.current_chapter_action else {},
         )
         self._apply_timelines(char, patch, chapter_id)
         char.embedding = self.model_manager.get_embedding_service().get_embedding(f"{char.name}. {description}")
         return char
 
-    def _is_name_upgrade(self, current: str, new: str) -> bool:
+    def _is_name_upgrade(self, current: str, new: str, taken: frozenset = frozenset()) -> bool:
         """
-        Повышение уровня имени: роль -> имя ("Служанка" -> "Сяолан") или имя дополнилось
-        другим именем ("Смит" -> "Уинстон Смит"). Добавление титула/роли к имени
-        ("Джинши" -> "Евнух Джинши") — не повышение: такое имя уходит в алиасы.
+        Повышение уровня имени:
+        - роль -> имя ("Служанка" -> "Сяолан");
+        - описание -> настоящее имя ("отец Маомао" -> "Луомен", "Добродетельная супруга" -> "Лишу"):
+          в текущем имени есть слово роли/родства, в новом нет ни одного, слова не пересекаются,
+          и имя не занято другим персонажем (иначе "отец Маомао" -> "Маомао");
+        - имя дополнилось другим именем ("Смит" -> "Уинстон Смит").
+        Добавление титула/роли к имени ("Джинши" -> "Евнух Джинши") — не повышение: уходит в алиасы.
         """
+        if new.lower() in taken:
+            return False
         if self._is_role_name(current) and not self._is_role_name(new):
             return True
         cur_words, new_words = re.findall(r"\w+", current.lower()), re.findall(r"\w+", new.lower())
-        if not cur_words or not set(cur_words) < set(new_words):
+        if not cur_words or not new_words:
+            return False
+        if (any(self._is_role_word(w) for w in cur_words) and not any(self._is_role_word(w) for w in new_words)
+                and not set(cur_words) & set(new_words)):
+            return True
+        if not set(cur_words) < set(new_words):
             return False
         extra = [w for w in new_words if w not in cur_words]
         return not all(w in self.GENERIC_ROLES_BLACKLIST or w in self._ORDINALS for w in extra)
 
     def _update_character(self, char: Character, patch: LlmCharacterPatch, chapter_id: str, role_weights: dict,
-                          allow_rename: bool = True):
+                          allow_rename: bool = True, taken: frozenset = frozenset()):
         # Имя: повышаем уровень, но не понижаем; при слиянии кандидата имя кандидата — только алиас
         if patch.name and patch.name.strip() != char.name:
             new_name = patch.name.strip()
-            if allow_rename and self._is_name_upgrade(char.name, new_name):
+            if allow_rename and self._is_name_upgrade(char.name, new_name, taken):
                 logger.info(f"   - ИМЯ: {char.name} -> {new_name}")
                 if not self._is_role_name(char.name):
                     char.aliases = sorted(set(char.aliases) | {char.name})
                 char.name = new_name
             elif not self._is_role_name(new_name):
+                logger.info(f"   - имя '{new_name}' -> алиас (остается '{char.name}')")
                 char.aliases = sorted(set(char.aliases) | {new_name})
         if patch.aliases:
             new_aliases = {a.strip() for a in patch.aliases if a and a.strip() != char.name and not self._is_role_name(a)}
@@ -451,10 +477,10 @@ class CharacterAnalysisPipeline:
             char.visual_base = patch.visual_base
         elif patch.visual_base and patch.visual_base != char.visual_base:
             self.stats["visual_base_overwrite_blocked"] += 1
-        if patch.voice_base and not char.voice_base:
-            char.voice_base = patch.voice_base
-        elif patch.voice_base and patch.voice_base != char.voice_base:
-            self.stats["voice_base_overwrite_blocked"] += 1
+        if patch.voice_profile and not char.voice_profile:
+            char.voice_profile = patch.voice_profile
+        elif patch.voice_profile and patch.voice_profile != char.voice_profile:
+            self.stats["voice_profile_overwrite_blocked"] += 1
 
         new_description = (patch.description_update or "").strip()
         if new_description and new_description != (char.description or "").strip():
