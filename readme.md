@@ -96,11 +96,13 @@ cp .env.example .env
 
 | Переменная             | Описание                                                                |
 |:-----------------------|:------------------------------------------------------------------------|
-| `LLM_PROVIDER`         | `google` (по умолчанию) или `openrouter`. **Рекомендуется OpenRouter.** |
+| `LLM_PROVIDER`         | `openrouter` (по умолчанию) или `google`.                               |
 | `GOOGLE_API_KEY`       | Ключ Google AI Studio (если выбран провайдер `google`).                 |
 | `OPENROUTER_API_KEY`   | Ключ OpenRouter (если выбран провайдер `openrouter`).                   |
-| `FAST_MODEL_NAME`      | Модель для простых задач - лучше какие-то flash или дешевые             |
-| `POWERFUL_MODEL_NAME`  | Модель для сложных задач                                                |
+| `FAST_MODEL_NAME`      | Модель для простых задач. По умолчанию `deepseek/deepseek-v4.1-flash-1017` |
+| `POWERFUL_MODEL_NAME`  | Модель для сложных задач. По умолчанию та же DeepSeek                    |
+| `OPENROUTER_PROVIDER_ORDER` | Провайдер на OpenRouter. По умолчанию `deepinfra/fp8` (фолбэки выключены) |
+| `OPENROUTER_REASONING_BY_STAGE` | Reasoning по этапам, JSON. По умолчанию `{"emotion_analysis": "none"}` |
 | `COSYVOICE_API_URL`    | Адрес API CosyVoice. По умолчанию: `http://localhost:9233`.             |
 | `COMFY_SERVER_ADDRESS` | Адрес API ComfyUI. По умолчанию: `http://127.0.0.1:8188`.               |
 

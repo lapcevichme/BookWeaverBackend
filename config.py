@@ -42,12 +42,16 @@ VOICES_DIR = STORAGE_DIR / "voices"
 SERVER_PORT = int(os.environ.get("SERVER_PORT", 8000))
 
 # LLM Settings Defaults
-_LLM_PROVIDER_DEFAULT = os.environ.get("LLM_PROVIDER", "google") # openrouter / google
-_FAST_MODEL_NAME_DEFAULT = os.environ.get("FAST_MODEL_NAME", "gemma-3-27b-it")
-_POWERFUL_MODEL_NAME_DEFAULT = os.environ.get("POWERFUL_MODEL_NAME", "gemma-3-27b-it")
-_OPENROUTER_PROVIDER_ORDER_DEFAULT = os.environ.get("OPENROUTER_PROVIDER_ORDER", "")
+# Проверенная конфигурация (ноябрь 2026): DeepSeek V4.1 Flash через OpenRouter, провайдер DeepInfra fp8.
+# Замеры и обоснование — docs/experiments/. Настройки в output/system.db переопределяют эти значения.
+_LLM_PROVIDER_DEFAULT = os.environ.get("LLM_PROVIDER", "openrouter")  # openrouter / google
+_FAST_MODEL_NAME_DEFAULT = os.environ.get("FAST_MODEL_NAME", "deepseek/deepseek-v4.1-flash-1017")
+_POWERFUL_MODEL_NAME_DEFAULT = os.environ.get("POWERFUL_MODEL_NAME", "deepseek/deepseek-v4.1-flash-1017")
+_OPENROUTER_PROVIDER_ORDER_DEFAULT = os.environ.get("OPENROUTER_PROVIDER_ORDER", "deepinfra/fp8")  # flex в 2-3 раза медленнее
 _OPENROUTER_REASONING_EFFORT_DEFAULT = os.environ.get("OPENROUTER_REASONING_EFFORT", "")
-_OPENROUTER_REASONING_BY_STAGE_DEFAULT = os.environ.get("OPENROUTER_REASONING_BY_STAGE", "")  # JSON: {"sound_design": "none"}
+# emotion_analysis без reasoning: -42% стоимости без потери качества (2026-11-06_reasoning-by-stage.md);
+# sound_design с reasoning: без него хуже подбор SFX.
+_OPENROUTER_REASONING_BY_STAGE_DEFAULT = os.environ.get("OPENROUTER_REASONING_BY_STAGE", '{"emotion_analysis": "none"}')
 _SCENARIO_MIN_COVERAGE_DEFAULT = 0.90
 _SCENARIO_MAX_ATTEMPTS_DEFAULT = 3
 _SCENARIO_PARALLEL_CHUNKS_DEFAULT = 4
@@ -55,6 +59,10 @@ _CHARACTER_REF_STYLE_DEFAULT = "name"  # numeric: c1, c2... | name: канони
 _CHARACTER_PATCH_BATCH_DEFAULT = 8
 _CHARACTER_CALL_ATTEMPTS_DEFAULT = 3  # попыток на разведку и на каждую пачку патча
 _LLM_REQUEST_TIMEOUT_DEFAULT = 1200  # сек; глава на 43k символов генерируется ~5 минут
+# Таймаут по этапам ≈ 2x максимума реальных вызовов в прогонах ноября 2026 (DeepSeek, DeepInfra):
+# recon макс. 108 с, patch 334 с, summary 65 с. Зависший провайдер иначе съедает весь общий таймаут.
+_LLM_TIMEOUT_BY_STAGE_DEFAULT = {"character_recon": 240, "character_patch": 600, "chapter_summary": 180,
+                                 "emotion_analysis": 180, "sound_design": 600}
 _SCENARIO_CHUNK_SIZE_DEFAULT = 45_000  # страховка для гигантских глав; см. docs/experiments/2026-11-06_chunking.md
 
 # Temp Defaults
@@ -167,6 +175,15 @@ def __getattr__(name: str):
         return int(_get_db_setting("character_patch_batch", _CHARACTER_PATCH_BATCH_DEFAULT))
     elif name == "SCENARIO_PARALLEL_CHUNKS":
         return int(_get_db_setting("scenario_parallel_chunks", _SCENARIO_PARALLEL_CHUNKS_DEFAULT))
+    elif name == "LLM_TIMEOUT_BY_STAGE":
+        value = _get_db_setting("llm_timeout_by_stage", _LLM_TIMEOUT_BY_STAGE_DEFAULT)
+        if isinstance(value, str):
+            import json as _json
+            try:
+                value = _json.loads(value) if value.strip() else {}
+            except ValueError:
+                value = {}
+        return value if isinstance(value, dict) else {}
     elif name == "LLM_REQUEST_TIMEOUT":
         return float(_get_db_setting("llm_request_timeout", _LLM_REQUEST_TIMEOUT_DEFAULT))
     elif name == "SCENARIO_CHUNK_SIZE":

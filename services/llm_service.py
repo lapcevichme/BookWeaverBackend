@@ -156,6 +156,16 @@ class LLMService:
         return {"effort": effort}
 
     @staticmethod
+    def _timeout_for(prompt_type: str) -> float:
+        """Таймаут запроса для этапа: llm_timeout_by_stage, иначе общий llm_request_timeout."""
+        import config
+        by_stage = getattr(config, "LLM_TIMEOUT_BY_STAGE", None) or {}
+        try:
+            return float(by_stage[prompt_type])
+        except (KeyError, TypeError, ValueError):
+            return float(config.LLM_REQUEST_TIMEOUT)
+
+    @staticmethod
     def _openrouter_routing() -> Optional[dict]:
         """
         Закрепление провайдера на OpenRouter. Порядок берется из настройки
@@ -194,7 +204,8 @@ class LLMService:
                     if extra:
                         kwargs["extra_body"] = extra
 
-                completion = self.client.chat.completions.create(**kwargs)
+                client = self.client.with_options(timeout=self._timeout_for(prompt_type))
+                completion = client.chat.completions.create(**kwargs)
                 usage = (0, 0)
                 if completion.usage:
                     usage = (completion.usage.prompt_tokens, completion.usage.completion_tokens)
@@ -219,7 +230,7 @@ class LLMService:
                 elif isinstance(e, APITimeoutError):
                     delay = 2
                     logger.warning(
-                        f"LLM таймаут, попытка {attempt + 1}/{max_retries}. Провайдер мог успеть "
+                        f"LLM таймаут ({prompt_type}, {self._timeout_for(prompt_type):.0f} с), попытка {attempt + 1}/{max_retries}. Провайдер мог успеть "
                         f"обработать и оплатить запрос; повторяю."
                     )
                 else:
